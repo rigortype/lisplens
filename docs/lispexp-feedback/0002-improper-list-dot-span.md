@@ -52,9 +52,15 @@ with 0 regressions across the emacs `lisp/` and magit/lem corpora.
 ## Companion request (comment spans) — no upstream change needed
 
 The notes' lower-priority ask (comment spans, for `indent-for-comment` on a lone
-`;` line) is already served by the **`lex` token layer**, which emits
-`LineComment` / `BlockComment` with byte spans — the tree stays trivia-free by
-design and a consumer correlates via span. lisplens has not needed it yet
-(`;;;`-preserve and `whitespace-after-open-paren` are handled from the datum
-tree); if/when a lone-`;` `comment-column` pass is wanted, filter `lex(src, opts)`
-rather than adding a `Parsed.comments` side channel. Left open, low priority.
+`;` line) needed no lispexp change after all. lisplens implemented the lone-`;` →
+`comment-column` pass **textually**: the formatter walks lines, and a line whose
+trimmed content starts with `;` (but not `;;`) is a comment — `;` is always
+comment-start in elisp, and lines inside a multi-line string are already excluded
+by the tree-based `in_string` guard that runs first. So own-line comment
+detection is trivial without token spans.
+
+Should a future need arise for *inline* comments (code then `;` on one line) or
+trivia-preserving edits, the **`lex` token layer** already emits `LineComment` /
+`BlockComment` with byte spans — the tree stays trivia-free by design and a
+consumer correlates via span, so still no `Parsed.comments` side channel is
+warranted. Closed.

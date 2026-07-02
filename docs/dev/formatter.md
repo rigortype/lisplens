@@ -34,10 +34,12 @@ A dotted-tail sublist — `(a . (b c))`, which Emacs reads as `(a b c)` — open
 own containing sexp; `container_at` descends into the tail so its elements indent
 against it. For a lone-car dotted pair (`'(eval . FORM)`) Emacs instead treats
 the `.` itself as the first argument, so the tail's continuation aligns under the
-dot — reached via lispexp's `Datum::dot_span` (0.5). A `;;;` comment line is never
-reindented (Emacs leaves it in place),
-matching the multi-line-string rule. Reindentation only rewrites leading
-whitespace, so it can never change what the file parses to (it is always safe).
+dot — reached via lispexp's `Datum::dot_span` (0.5). Comment-only lines follow
+Emacs's three-way rule: `;;;` (3+) is never reindented (left in place, like a
+multi-line string), a lone `;` goes to `comment-column` (`indent-for-comment`,
+default 40, always — independent of nesting or prior column), and `;;` indents as
+code. Reindentation only rewrites leading whitespace, so it can never change what
+the file parses to (it is always safe).
 
 ### The key invariant — do not regress
 
@@ -132,13 +134,14 @@ not `cargo test`.
 
 ## Config resolution (ADR-0029)
 
-`config::resolve(path, source) -> FormatConfig{indent_tabs, tab_width, body_indent}`.
+`config::resolve(path, source) -> FormatConfig{indent_tabs, tab_width, body_indent, comment_column}`.
 Precedence (high→low): file-local (`-*-` header + `Local Variables:` footer) >
 `.dir-locals-2.el` > `.dir-locals.el` (up the tree, nearer wins) >
 `.editorconfig` (up to `root=true`, glob-matched) > defaults (spaces,
-tab-width 8, `lisp-body-indent` 2). `body_indent` is Emacs's `lisp-body-indent`
-— the width of one structural step (`open_col + body`, and `2×body` for a
-specform's 1st/2nd distinguished args); EditorConfig `indent_size` maps to it.
+tab-width 8, `lisp-body-indent` 2, `comment-column` 40). `body_indent` is Emacs's
+`lisp-body-indent` — the width of one structural step (`open_col + body`, and
+`2×body` for a specform's 1st/2nd distinguished args); EditorConfig `indent_size`
+maps to it. `comment_column` is Emacs's `comment-column` (lone-`;` alignment).
 dir-locals are parsed with lispexp; the EditorConfig glob supports
 `*` `**` `?` `[set]` `{alt}`.
 

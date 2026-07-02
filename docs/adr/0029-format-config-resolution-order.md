@@ -11,7 +11,7 @@ Resolution applies sources low-to-high so higher overrides: defaults → EditorC
 
 ## Scope
 
-Variables consumed: `indent-tabs-mode`, `tab-width`, and `lisp-body-indent` (the structural indent unit, default 2). EditorConfig maps `indent_style` → `indent-tabs-mode`, `tab_width` → `tab-width`, and `indent_size` → `lisp-body-indent`. The same precedence applies to all three.
+Variables consumed: `indent-tabs-mode`, `tab-width`, `lisp-body-indent` (the structural indent unit, default 2), and `comment-column` (lone-`;` comment alignment, default 40). EditorConfig maps `indent_style` → `indent-tabs-mode`, `tab_width` → `tab-width`, and `indent_size` → `lisp-body-indent`; `comment-column` has no EditorConfig equivalent. The same precedence applies to all.
 
 ## Status
 

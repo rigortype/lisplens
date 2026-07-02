@@ -112,6 +112,12 @@ fn format_elisp_impl(source: &str, config: &FormatConfig, nameless: Option<&Name
             // (three comment-start chars) — its column is left as written.
             new_indent[i] = old_indent[i];
             lines.push(content.to_string());
+        } else if trimmed.starts_with(';') && !trimmed.starts_with(";;") {
+            // A lone `;` own-line comment goes to `comment-column`, always
+            // (Emacs `indent-for-comment`) — independent of nesting or any
+            // earlier column. `;;` comments fall through to the code path.
+            new_indent[i] = config.comment_column;
+            lines.push(format!("{}{trimmed}", render_indent(config.comment_column, config)));
         } else {
             let indent = {
                 let cols = Cols {
@@ -615,6 +621,20 @@ kw))
           ,(compute)))
 ";
         assert_eq!(format_elisp(input, &FormatConfig::default()), expected);
+    }
+
+    /// A lone `;` own-line comment aligns to `comment-column` (default 40),
+    /// independent of nesting; `;;` still indents as code. Matches Emacs
+    /// `indent-for-comment`; `comment_column` is configurable.
+    #[test]
+    fn lone_semicolon_comment_aligns_to_comment_column() {
+        let input = "(defun f ()\n; margin\n;; code\n(bar))\n";
+        let expected = format!("(defun f ()\n{}; margin\n  ;; code\n  (bar))\n", " ".repeat(40));
+        assert_eq!(format_elisp(input, &FormatConfig::default()), expected);
+
+        let cfg = FormatConfig { comment_column: 20, ..FormatConfig::default() };
+        let expected20 = format!("(defun f ()\n{}; margin\n  ;; code\n  (bar))\n", " ".repeat(20));
+        assert_eq!(format_elisp(input, &cfg), expected20);
     }
 
     /// `lisp-body-indent` (config `body_indent`) scales every structural step:

@@ -17,11 +17,14 @@ pub struct FormatConfig {
     /// Emacs `lisp-body-indent`: columns for one structural indent step
     /// (a `def…` body, a specform's distinguished/body args). Default 2.
     pub body_indent: usize,
+    /// Emacs `comment-column`: the column a lone `;` own-line comment aligns to
+    /// (`indent-for-comment`). Default 40.
+    pub comment_column: usize,
 }
 
 impl Default for FormatConfig {
     fn default() -> Self {
-        FormatConfig { indent_tabs: false, tab_width: 8, body_indent: 2 }
+        FormatConfig { indent_tabs: false, tab_width: 8, body_indent: 2, comment_column: 40 }
     }
 }
 
@@ -52,6 +55,11 @@ fn set_var(cfg: &mut FormatConfig, var: &str, val: &str) {
         "lisp-body-indent" => {
             if let Ok(n) = val.trim().parse::<usize>() {
                 cfg.body_indent = n;
+            }
+        }
+        "comment-column" => {
+            if let Ok(n) = val.trim().parse::<usize>() {
+                cfg.comment_column = n;
             }
         }
         _ => {}
