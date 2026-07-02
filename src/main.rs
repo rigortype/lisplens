@@ -14,8 +14,9 @@ fn main() -> ExitCode {
     match (mode.as_deref(), verb.as_deref(), file) {
         (Some("struct"), Some("read"), Some(file)) => run_struct_read(PathBuf::from(file)),
         (Some("line"), Some("read"), Some(file)) => run_line_read(PathBuf::from(file)),
-        (Some("line" | "struct"), Some("edit"), _) => {
-            eprintln!("lisplens: `edit` is not implemented yet");
+        (Some("line"), Some("edit"), Some(file)) => run_line_edit(PathBuf::from(file)),
+        (Some("struct"), Some("edit"), _) => {
+            eprintln!("lisplens: `struct edit` is not implemented yet");
             ExitCode::FAILURE
         }
         _ => usage(),
@@ -52,6 +53,32 @@ fn run_struct_read(path: PathBuf) -> ExitCode {
         println!("{:>5}  {}  {}  {indent}{name}", entry.line, entry.hash, entry.kind);
     }
     ExitCode::SUCCESS
+}
+
+fn run_line_edit(path: PathBuf) -> ExitCode {
+    let mut input = String::new();
+    if let Err(err) = std::io::Read::read_to_string(&mut std::io::stdin(), &mut input) {
+        eprintln!("lisplens: reading patch from stdin: {err}");
+        return ExitCode::FAILURE;
+    }
+    let patch = match lisplens::patch::parse_line_patch(&input) {
+        Ok(patch) => patch,
+        Err(err) => {
+            eprintln!("lisplens: patch parse error: {err:?}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let options = lisplens::options_for_path(&path);
+    match lisplens::patch::apply_line_patch(&path, &patch, &options) {
+        Ok(outcome) => {
+            println!("ok {}", outcome.new_file_hash);
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("lisplens: {err:?}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 fn usage() -> ExitCode {

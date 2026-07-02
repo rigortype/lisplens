@@ -9,6 +9,7 @@ pub mod apply;
 pub mod edit;
 pub mod hash;
 pub mod linehash;
+pub mod patch;
 pub mod structural;
 pub mod write;
 
@@ -86,6 +87,11 @@ fn name_text(datum: &Datum) -> Option<String> {
         },
         _ => None,
     }
+}
+
+/// The lispexp [`Options`] for a path's guessed dialect ([`dialect_for_path`]).
+pub fn options_for_path(path: &Path) -> Options {
+    Options::for_dialect(dialect_for_path(path))
 }
 
 /// Zero-config dialect guess from a file extension (ADR-0004, first pass).
