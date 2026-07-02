@@ -16,7 +16,7 @@ pub mod write;
 
 use std::path::Path;
 
-use lispexp::annotate::{annotate_tree, bundled_registry, Role};
+use lispexp::annotate::{annotate_tree, bundled_registry, Annotated, Role};
 use lispexp::{parse, Datum, DatumKind, Dialect, Options};
 
 use crate::hash::anchor_hash;
@@ -37,6 +37,10 @@ pub struct OutlineEntry {
     pub kind: String,
     /// The defined name, when one can be extracted.
     pub name: Option<String>,
+    /// A method's Dispatch signature (ADR-0022) — qualifiers, a Clojure
+    /// dispatch value, and specializer tokens — for readability. `None` for
+    /// non-methods.
+    pub signature: Option<String>,
 }
 
 /// Produce a structural Outline (ADR-0013) of `source`'s definitions for
@@ -66,9 +70,40 @@ pub fn outline(source: &str, dialect: Dialect) -> Vec<OutlineEntry> {
                 hash: anchor_hash(span_bytes(source, form.form)),
                 kind: form.head.to_string(),
                 name: form.first(Role::Name).and_then(name_text),
+                signature: dispatch_signature(source, form),
             }
         })
         .collect()
+}
+
+/// A method's Dispatch signature (ADR-0022): its verbatim qualifiers, a Clojure
+/// dispatch value, and its specializer tokens. `None` if the form carries none
+/// of these (i.e. it is not a method).
+fn dispatch_signature(source: &str, form: &Annotated) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    for qualifier in form.all(Role::Qualifier) {
+        parts.push(span_text(source, qualifier).to_string());
+    }
+    if let Some(value) = form.first(Role::DispatchValue) {
+        parts.push(span_text(source, value).to_string());
+    }
+    let specialized = form.specialized_params();
+    if specialized.iter().any(|p| p.specializer.is_some()) {
+        let tokens: Vec<String> = specialized
+            .iter()
+            .map(|p| match p.specializer {
+                Some(s) => span_text(source, s).to_string(),
+                None => "_".to_string(),
+            })
+            .collect();
+        parts.push(format!("({})", tokens.join(" ")));
+    }
+    (!parts.is_empty()).then(|| parts.join(" "))
+}
+
+/// The verbatim source text of `datum`'s span.
+fn span_text<'a>(source: &'a str, datum: &Datum) -> &'a str {
+    &source[datum.span.start as usize..datum.span.end as usize]
 }
 
 /// The verbatim source bytes of `datum`'s span.
@@ -135,6 +170,19 @@ mod tests {
         assert_eq!(entries[0].depth, 0);
         assert_eq!(entries[0].hash.len(), 4);
         assert_eq!(entries[1].name.as_deref(), Some("pi"));
+    }
+
+    #[test]
+    fn methods_carry_a_dispatch_signature() {
+        let src = "(cl-defmethod area ((s square)) 1)\n(cl-defmethod area ((s circle)) 2)\n";
+        let entries = outline(src, Dialect::EmacsLisp);
+
+        assert_eq!(entries.len(), 2);
+        assert!(entries[0].signature.as_deref().unwrap().contains("square"), "{:?}", entries[0]);
+        assert!(entries[1].signature.as_deref().unwrap().contains("circle"), "{:?}", entries[1]);
+
+        let plain = outline("(defun f () 1)\n", Dialect::EmacsLisp);
+        assert_eq!(plain[0].signature, None);
     }
 
     #[test]

@@ -45,9 +45,15 @@ fn run_struct_read(path: PathBuf) -> ExitCode {
         let name = entry.name.as_deref().unwrap_or("-");
         // ADR-0013 Outline columns: line, hash, kind, name (name last). Nesting
         // is shown by indenting the name column (name can contain spaces, so it
-        // must stay last).
+        // must stay last); a method's Dispatch signature follows the name
+        // (ADR-0022).
         let indent = "  ".repeat(entry.depth as usize);
-        println!("{:>5}  {}  {}  {indent}{name}", entry.line, entry.hash, entry.kind);
+        let sig = entry
+            .signature
+            .as_deref()
+            .map(|s| format!(" {s}"))
+            .unwrap_or_default();
+        println!("{:>5}  {}  {}  {indent}{name}{sig}", entry.line, entry.hash, entry.kind);
     }
     ExitCode::SUCCESS
 }
