@@ -6,11 +6,15 @@ in the dev docs** (see `AGENTS.md` → Codebase): `docs/dev/architecture.md`,
 
 ## Now
 
-- 80 tests pass, `cargo clippy --all-targets` clean; tree clean. 29 ADRs.
+- 83 tests pass, `cargo clippy --all-targets` clean; tree clean. 30 ADRs.
 - **First-release goal: a faithful Emacs Lisp formatter.**
 - Formatter fidelity: 20 random `~/local/src/emacs/lisp` files, stripped and
   reformatted, diffed against Emacs `indent-region` → **12/20 byte-exact,
   ~99.0% of lines match**. (Harness: `docs/dev/formatter.md`.)
+- **Nameless-aware indentation (ADR-0030)**: `format --nameless` models
+  Nameless's namespace-prefix composition (`php-`→`:`, `font-lock-`→`fl:`) in
+  the column model. On `php-mode/lisp` all seven Nameless-affected lines match
+  Emacs (2/5 files byte-exact; the rest diff only on the pre-existing long tail).
 
 ## Next steps (priority order)
 

@@ -12,6 +12,7 @@ pub mod format;
 pub mod hash;
 pub mod linehash;
 pub mod mcp;
+pub mod nameless;
 pub mod patch;
 pub mod resolve;
 pub mod search;

@@ -21,6 +21,7 @@ use lispexp::indent::{harvest_indent_specs, IndentSpec, IndentTable};
 use lispexp::{parse, Datum, DatumKind, LineIndex, Options};
 
 use crate::config::FormatConfig;
+use crate::nameless::Nameless;
 
 const BODY: usize = 2; // lisp-body-indent
 
@@ -33,14 +34,24 @@ struct Cols<'a> {
     index: &'a LineIndex,
     old_indent: &'a [usize],
     new_indent: &'a [usize],
+    /// Per line, the `(offset, columns_saved)` of each Nameless-composed prefix
+    /// on it (ADR-0030); empty when Nameless emulation is off.
+    savings: &'a [Vec<(u32, usize)>],
 }
 
 impl Cols<'_> {
-    /// The output column of `offset`.
+    /// The output column of `offset`, in displayed columns: Nameless-composed
+    /// prefixes beginning earlier on the line count as their shorter glyph.
     fn col(&self, offset: usize) -> usize {
         let (line, column) = self.index.offset_to_line_col(offset as u32);
         let l = line as usize - 1;
-        (column as usize - 1) - self.old_indent[l] + self.new_indent[l]
+        let raw = (column as usize - 1) - self.old_indent[l] + self.new_indent[l];
+        let saved: usize = self.savings[l]
+            .iter()
+            .filter(|(o, _)| (*o as usize) < offset)
+            .map(|(_, s)| *s)
+            .sum();
+        raw - saved
     }
 
     fn line_of(&self, offset: usize) -> u32 {
@@ -52,11 +63,27 @@ impl Cols<'_> {
 /// whitespace on each line is recomputed; tokens and line order are untouched,
 /// so this never changes what the file parses to.
 pub fn format_elisp(source: &str, config: &FormatConfig) -> String {
+    format_elisp_impl(source, config, None)
+}
+
+/// Like [`format_elisp`], but measuring columns as they display under Nameless
+/// (ADR-0030) — used when the caller opts into Nameless emulation for a file.
+pub fn format_elisp_nameless(source: &str, config: &FormatConfig, nameless: &Nameless) -> String {
+    format_elisp_impl(source, config, Some(nameless))
+}
+
+fn format_elisp_impl(source: &str, config: &FormatConfig, nameless: Option<&Nameless>) -> String {
     let parsed = parse(source, &Options::emacs_lisp());
     let mut table = builtin_indent_table();
     table.merge(harvest_indent_specs(source));
     let index = LineIndex::new(source);
     let count = index.line_count();
+
+    // Per line, where Nameless composes a prefix and by how many columns.
+    let mut savings: Vec<Vec<(u32, usize)>> = vec![Vec::new(); count];
+    if let Some(nl) = nameless {
+        collect_savings(&parsed.data, &index, nl, &mut savings);
+    }
 
     // Original leading-whitespace width of each line (byte columns).
     let old_indent: Vec<usize> = (1..=count as u32)
@@ -84,7 +111,12 @@ pub fn format_elisp(source: &str, config: &FormatConfig) -> String {
             lines.push(content.to_string());
         } else {
             let indent = {
-                let cols = Cols { index: &index, old_indent: &old_indent, new_indent: &new_indent };
+                let cols = Cols {
+                    index: &index,
+                    old_indent: &old_indent,
+                    new_indent: &new_indent,
+                    savings: &savings,
+                };
                 match container_at(&parsed.data, range.start) {
                     Some(c) => indent_for(&cols, &table, c, range.start),
                     None => 0,
@@ -106,6 +138,32 @@ fn render_indent(col: usize, config: &FormatConfig) -> String {
         format!("{}{}", "\t".repeat(tabs), " ".repeat(spaces))
     } else {
         " ".repeat(col)
+    }
+}
+
+/// Record, per line, each Nameless-composed symbol's start offset and the
+/// columns its prefix collapses by (ADR-0030).
+fn collect_savings(data: &[Datum], index: &LineIndex, nl: &Nameless, out: &mut [Vec<(u32, usize)>]) {
+    for d in data {
+        match &d.kind {
+            DatumKind::Symbol(s) => {
+                let save = nl.saving(s);
+                if save > 0 {
+                    let line = index.offset_to_line_col(d.span.start).0 as usize - 1;
+                    out[line].push((d.span.start, save));
+                }
+            }
+            DatumKind::List { items, tail, .. } => {
+                collect_savings(items, index, nl, out);
+                if let Some(t) = tail {
+                    collect_savings(std::slice::from_ref(t), index, nl, out);
+                }
+            }
+            DatumKind::Prefixed { inner, .. } => {
+                collect_savings(std::slice::from_ref(inner), index, nl, out)
+            }
+            _ => {}
+        }
     }
 }
 
@@ -414,6 +472,34 @@ c)
        c)
 ";
         assert_eq!(format_elisp(input, &FormatConfig::default()), expected);
+    }
+
+    /// Under Nameless (ADR-0030) alignment is measured against the displayed,
+    /// composed width: `php-` (current name, 4 chars) collapses to `:` (1) and
+    /// `font-lock-` (10) to `fl:` (2), so first-argument alignment shifts left
+    /// by 3 and 8 columns respectively. Golden captured from Emacs with
+    /// `nameless-mode` and `nameless-current-name` = "php".
+    #[test]
+    fn matches_emacs_under_nameless() {
+        let input = "\
+(defun php-mode-foo-bar (arg)
+(php-mode-some-function arg
+another-arg)
+(font-lock-add-keywords nil
+kw))
+";
+        let expected = "\
+(defun php-mode-foo-bar (arg)
+  (php-mode-some-function arg
+                       another-arg)
+  (font-lock-add-keywords nil
+                  kw))
+";
+        let nl = Nameless::for_file("php-mode.el");
+        assert_eq!(format_elisp_nameless(input, &FormatConfig::default(), &nl), expected);
+        // Off by default: without Nameless the alignment is the literal width.
+        assert!(format_elisp(input, &FormatConfig::default())
+            .contains("\n                          another-arg)"));
     }
 
     #[test]

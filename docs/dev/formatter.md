@@ -60,6 +60,25 @@ Note the **`'macro`** third argument to `function-get` — without it, macro
 `pcase`, etc. all came back nil). Filter to Rust-safe identifier names; all 326
 were integer/defun (zero function specs), so the whole set is usable.
 
+## Nameless-aware indentation (ADR-0030)
+
+Some elisp (e.g. `php-mode`'s `lisp/`) is indented as it *displays* under
+[Nameless](https://github.com/Malabarba/Nameless), which composes a package's
+namespace prefix to a shorter glyph so Emacs measures alignment against the
+displayed width. Opt in with `format --nameless FILE` (off by default — the
+other corpora are not Nameless). When on, `format_elisp_nameless` builds a
+`Nameless` (in `src/nameless.rs`) from the file name and the default
+`nameless-global-aliases`; `Cols::col` then subtracts, from every column it
+measures, the width saved by composed prefixes beginning earlier on the line.
+
+- **Current name** is discovered from the file name the way Nameless does
+  (`php-mode.el` → `php`); `php-foo` composes `php-` (4) → `:` (1), saving 3.
+- **Aliases** default to `fl` → `font-lock`; `font-lock-` (10) → `fl:` (2),
+  saving 8. The composed width is `⌊len(display+":")/2⌋ + 1` — Nameless's
+  `(Br . Bl)` composition packs glyphs to ~half width (verified against Emacs).
+- **`nameless-private-prefix` is not modelled**: it is width-neutral (the extra
+  separator char is matched by an extra glyph), affecting only the shown glyph.
+
 ## Fidelity harness (the main tool for first release)
 
 Emacs binary: `/Applications/Emacs.app/Contents/MacOS/Emacs`. For each file:
@@ -81,6 +100,15 @@ diff mine.el em.el
   nil specs for cl-*/pcase/… and the comparison is unfair.
 - Corpora: `../lispexp/tests/corpus/{magit,lem}/…`, and random samples from
   `~/local/src/emacs/lisp/`.
+- For a Nameless corpus (`~/repo/emacs/php-mode/lisp`), format with
+  `lisplens format --nameless` and enable Nameless on the Emacs side:
+  `-l nameless.el … (nameless-mode 1) (font-lock-ensure)` **before**
+  `indent-region`. The forced `font-lock-ensure` is essential — batch redisplay
+  never applies the composition, so without it Nameless changes nothing and the
+  comparison is against plain indentation. Keep the buffer name `*.el` so
+  `nameless-current-name` auto-discovers. On `php-mode`'s five source files all
+  seven Nameless-affected lines match Emacs; the residual diffs are the same
+  spec-driven long tail as the non-Nameless corpora.
 
 Format **unit tests** use Emacs-captured golden output, so they stay
 environment-independent — the harness above is for manual/CI fidelity checks,
