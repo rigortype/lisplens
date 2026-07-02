@@ -25,7 +25,10 @@ indent spec:
   is a *function call*: align under the first argument if it's on the open-paren's
   line, else under the head. A **non-symbol head** (string, list, or a prefix
   wrapping one — `'(…)`, `,(…)`) is *data*: align every element under the first
-  one. When no element is completed on an earlier line, indent `open_col + 1`.
+  one. Whitespace right after the open paren (`( a b`) also forces
+  align-under-first (Emacs's `whitespace-after-open-paren`), which is what indents
+  a dotted tail's `. ,x` line. When no element is completed on an earlier line,
+  indent `open_col + 1`.
 
 A dotted-tail sublist — `(a . (b c))`, which Emacs reads as `(a b c)` — opens its
 own containing sexp; `container_at` descends into the tail so its elements indent

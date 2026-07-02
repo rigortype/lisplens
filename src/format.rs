@@ -250,10 +250,12 @@ fn normal_indent(cols: &Cols, c: &Datum, items: &[Datum], open_col: usize, offse
     if cols.line_of(first.span.start as usize) >= cols.line_of(offset) {
         return open_col + 1;
     }
-    // A head that isn't a symbol-like token (a list, string, char or prefixed
-    // form) marks data, not a function call: Emacs's `lisp-indent-function`
-    // "car is not a symbol" path aligns every element under the first one.
-    if !head_is_symbol_like(first) {
+    // Align under the first element (not the first argument) when either the
+    // head isn't a symbol-like token — a list/string/char or prefixed form, so
+    // `lisp-indent-function`'s "car is not a symbol" data path applies — or
+    // whitespace sits right after the open paren (`( a b`), which is Emacs's
+    // `whitespace-after-open-paren` case.
+    if !head_is_symbol_like(first) || first.span.start as usize > c.span.start as usize + 1 {
         return cols.col(first.span.start as usize);
     }
     // A function call whose first argument sits on the open-paren's line →
@@ -594,6 +596,32 @@ kw))
 (defun g ()
   `(,head first
           ,(compute)))
+";
+        assert_eq!(format_elisp(input, &FormatConfig::default()), expected);
+    }
+
+    /// Whitespace right after an open paren (`( a b`) makes Emacs align the
+    /// continuation under the first element, not the first argument — even for a
+    /// symbol head, and for a dotted tail (`( a b . ,x)`). Golden from Emacs.
+    #[test]
+    fn matches_emacs_on_whitespace_after_open_paren() {
+        let input = "\
+(defvar x
+`( TIMESTAMP MULTIPLE
+. ,(delq a
+b)))
+(defun f ()
+( one two
+three))
+";
+        let expected = "\
+(defvar x
+  `( TIMESTAMP MULTIPLE
+     . ,(delq a
+              b)))
+(defun f ()
+  ( one two
+    three))
 ";
         assert_eq!(format_elisp(input, &FormatConfig::default()), expected);
     }
