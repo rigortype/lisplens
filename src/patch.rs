@@ -300,6 +300,7 @@ enum SVerb {
     Split,
     Join,
     Rename,
+    Format,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -348,6 +349,7 @@ pub fn parse_struct_patch(input: &str) -> Result<StructPatch, PatchError> {
             Some("split") => SVerb::Split,
             Some("join") => SVerb::Join,
             Some("rename") => SVerb::Rename,
+            Some("format") => SVerb::Format,
             _ => return Err(PatchError::BadOp(line.to_string())),
         };
         let bad = || PatchError::BadOp(line.to_string());
@@ -406,6 +408,9 @@ pub fn apply_struct_patch(
 
     let parsed = lispexp::parse(&source, &options);
     let mut edits = Vec::new();
+    // Indices in `edits` produced by `format` ops — their identity edits reindent
+    // exactly the anchored form, not the whole enclosing top-level form.
+    let mut format_edits: Vec<usize> = Vec::new();
     for op in &patch.ops {
         let located = crate::resolve::resolve(&source, &parsed.data, &op.anchor).ok_or_else(|| {
             ApplyError::AnchorNotFound {
@@ -413,17 +418,29 @@ pub fn apply_struct_patch(
                 hash: op.anchor.hash.clone(),
             }
         })?;
-        edits.extend(build_struct_edits(&source, &parsed.data, op, &located)?);
+        let op_edits = build_struct_edits(&source, &parsed.data, op, &located)?;
+        if matches!(op.verb, SVerb::Format) {
+            format_edits.extend(edits.len()..edits.len() + op_edits.len());
+        }
+        edits.extend(op_edits);
     }
 
     let (spliced, spans) = splice_tracked(&source, edits).map_err(ApplyError::Splice)?;
-    // Auto-format the touched region (ADR-0025/0028): reindent the top-level
-    // forms the edits fell within, leaving the rest byte-identical. Structural
-    // only — Line-hash edits stay literal (ADR-0027) — and Emacs Lisp only, the
-    // one dialect with a formatter so far.
+    // Auto-format the touched region (ADR-0025/0028): a content edit reindents
+    // its whole enclosing top-level form (`expand`); a `format` op reindents
+    // exactly its anchored form (`exact`, ADR-0028 point 3). Everything else stays
+    // byte-identical. Structural + Emacs Lisp only — Line-hash stays literal
+    // (ADR-0027), and Emacs Lisp is the one dialect with a formatter so far.
     let new_content = if dialect == Dialect::EmacsLisp {
         let config = crate::config::resolve(path, &spliced);
-        crate::format::reindent_range(&spliced, &config, &spans)
+        let expand: Vec<_> = spans
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !format_edits.contains(i))
+            .map(|(_, r)| r.clone())
+            .collect();
+        let exact: Vec<_> = format_edits.iter().map(|&i| spans[i].clone()).collect();
+        crate::format::reindent(&spliced, &config, crate::format::Touched { expand: &expand, exact: &exact })
     } else {
         spliced
     };
@@ -485,6 +502,10 @@ fn build_struct_edits(
             let (from, to) = op.rename.as_ref().ok_or_else(|| na("rename: missing from/to"))?;
             st::rename(node, from, to)
         }
+        // An identity edit: it changes nothing, but records the node's span so
+        // the post-splice reindent can format exactly this form (ADR-0028 point
+        // 3). The actual reindent runs in `apply_struct_patch`.
+        SVerb::Format => vec![Edit { range: span.clone(), text: source[span].to_string() }],
     })
 }
 
@@ -522,6 +543,25 @@ mod tests {
         let patch = parse_line_patch("@ abc123\ndelete 3:9999\n").unwrap();
         assert_eq!(patch.file_hash, "abc123");
         assert_eq!(patch.ops.len(), 1);
+    }
+
+    #[test]
+    fn format_op_reindents_exactly_the_anchored_nested_form() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.el");
+        // `(bar a / b)` nested in `progn`; both it and its sibling `(baz c / d)`
+        // are misindented.
+        let source = "(progn\n  (bar a\nb)\n(baz c\nd))\n";
+        std::fs::write(&path, source).unwrap();
+        let fh = file_hash(source.as_bytes());
+        let h = anchor_hash("(bar a\nb)".as_bytes());
+        let patch = parse_struct_patch(&format!("@ {fh}\nformat 2:{h}\n")).unwrap();
+        apply_struct_patch(&path, &patch, Dialect::EmacsLisp).unwrap();
+        // Only the anchored form is reindented; the sibling stays byte-identical.
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "(progn\n  (bar a\n       b)\n(baz c\nd))\n"
+        );
     }
 
     #[test]

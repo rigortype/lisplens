@@ -42,19 +42,21 @@ pub fn splice(source: &str, edits: Vec<Edit>) -> Result<String, SpliceError> {
     splice_tracked(source, edits).map(|(out, _)| out)
 }
 
-/// Like [`splice`], but also returns — for each edit, in applied (sorted) order —
-/// the byte range its inserted `text` occupies in the result. Used to locate the
-/// touched region for auto-format (ADR-0025/0028).
+/// Like [`splice`], but also returns — for each edit, **in the caller's original
+/// order** — the byte range its inserted `text` occupies in the result. Used to
+/// locate the touched region for auto-format (ADR-0025/0028), and to recover the
+/// post-splice span of a `format` op's identity edit.
 pub fn splice_tracked(
     source: &str,
-    mut edits: Vec<Edit>,
+    edits: Vec<Edit>,
 ) -> Result<(String, Vec<Range<usize>>), SpliceError> {
-    edits.sort_by_key(|e| (e.range.start, e.range.end));
+    let mut order: Vec<usize> = (0..edits.len()).collect();
+    order.sort_by_key(|&i| (edits[i].range.start, edits[i].range.end));
     let mut out = String::with_capacity(source.len());
     let mut cursor = 0usize;
-    let mut spans = Vec::with_capacity(edits.len());
-    for edit in &edits {
-        let Range { start, end } = edit.range;
+    let mut spans = vec![0..0; edits.len()];
+    for &i in &order {
+        let Range { start, end } = edits[i].range.clone();
         if start > end
             || end > source.len()
             || !source.is_char_boundary(start)
@@ -67,8 +69,8 @@ pub fn splice_tracked(
         }
         out.push_str(&source[cursor..start]);
         let new_start = out.len();
-        out.push_str(&edit.text);
-        spans.push(new_start..out.len());
+        out.push_str(&edits[i].text);
+        spans[i] = new_start..out.len();
         cursor = end;
     }
     out.push_str(&source[cursor..]);

@@ -15,7 +15,7 @@ content-hash **anchor** for any target, and edit by anchor.
 | `hash` | xxh3-64 anchor (4-hex) + file (16-hex) hashes (ADR-0008) |
 | `linehash` | Line-hash read: `[path#FILEHASH]` + `N:hash|content`, via lispexp `LineIndex` |
 | `edit` | `splice` (non-overlapping byte-range replace) + `LineOp`/`apply_line_ops` (ADR-0006) |
-| `structural` | paredit ops as span→edits: wrap/raise/splice/slurp±/barf±/split/join/rename (ADR-0012) |
+| `structural` | paredit ops as span→edits: wrap/raise/splice/slurp±/barf±/split/join/rename/format (ADR-0012) |
 | `resolve` | `line:hash[:ordinal]` anchor → node (+parent/index) in the parse tree (ADR-0018) |
 | `write` | `verify_and_write`: drift gate + validate-then-write + atomic (perms/symlink-safe) (ADR-0005/0017); `write_atomically` is pub |
 | `apply` | end-to-end: read→drift→splice→verify_and_write (`apply_*_to_file`) |
@@ -33,7 +33,7 @@ CLI (`lisplens …`):
 ```
 struct read <file> [name]   Outline (line hash kind name [signature]); with name, expand inner nodes
 line   read <file>          hashline-style line view
-struct edit <file>          apply Structural patch from stdin (12 verbs)
+struct edit <file>          apply Structural patch from stdin (13 verbs)
 line   edit <file>          apply Line-hash patch from stdin (replace/delete/insert±)
 find <name> [dir]           definitions by name
 refs <name> [dir]           symbol occurrences (code/data tagged)
@@ -51,8 +51,9 @@ op-array is a future option).
 Addressing is **hash-first** (ADR-0018); S-expr structural addresses are
 deferred. Structural verbs: replace / delete / wrap / raise / splice /
 slurp-fwd / slurp-back / barf-fwd / barf-back / `split @<index>` /
-`join <anchor2>` / `rename <from> <to>`. Line-hash verbs: replace / delete /
-insert-after / insert-before.
+`join <anchor2>` / `rename <from> <to>` / `format` (reindent the anchored form
+in place, ADR-0028). Line-hash verbs: replace / delete / insert-after /
+insert-before.
 
 ## Safety pipeline (both modes)
 

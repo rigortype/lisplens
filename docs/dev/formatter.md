@@ -165,5 +165,12 @@ whole-file loop with a per-line "is this line in a touched form?" gate
 (`touched_line_mask`). Each touched form is reindented in full so its internal
 alignment stays self-consistent (a form's alignment targets are all within it).
 `apply_struct_patch` calls it after `edit::splice_tracked` (which returns each
-edit's post-splice byte span), gated to Emacs Lisp; the returned file-hash is of
-the reindented content. Line-hash edits stay literal (ADR-0027).
+edit's post-splice byte span, in caller order), gated to Emacs Lisp; the returned
+file-hash is of the reindented content. Line-hash edits stay literal (ADR-0027).
+
+Two scopes share one engine, via `Touched { expand, exact }`: a content edit's
+span is an `expand` range (pull in the whole enclosing top-level form), while the
+`format <anchor>` op reindents `exact`ly the anchored form — possibly nested, in
+full context (`reindent_block`). The `format` op is carried as an *identity edit*
+(replace the node with its own bytes) so `splice_tracked` hands back its
+post-splice span for free and any conflict with another op is caught by splice.

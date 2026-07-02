@@ -72,18 +72,39 @@ pub fn format_elisp_nameless(source: &str, config: &FormatConfig, nameless: &Nam
     format_elisp_impl(source, config, Some(nameless), None)
 }
 
-/// Touched-region reindent (ADR-0025/0028): reindent only the top-level forms
-/// overlapping any of `ranges` (byte offsets into `source`); every other line is
-/// byte-identical. Used to auto-format the forms an edit fell within.
+/// Which lines a touched-region reindent rewrites (ADR-0025/0028): the
+/// `expand` ranges pull in the whole enclosing top-level form (auto-format on
+/// edit), while the `exact` ranges rewrite only the lines they cover
+/// (`format`-by-anchor of one, possibly nested, form). Everything else stays
+/// byte-identical.
+#[derive(Clone, Copy, Default)]
+pub struct Touched<'a> {
+    pub expand: &'a [Range<usize>],
+    pub exact: &'a [Range<usize>],
+}
+
+/// Auto-format reindent: reindent the whole top-level form(s) overlapping any of
+/// `ranges`. Used for the touched region of a Structural edit.
 pub fn reindent_range(source: &str, config: &FormatConfig, ranges: &[Range<usize>]) -> String {
-    format_elisp_impl(source, config, None, Some(ranges))
+    reindent(source, config, Touched { expand: ranges, exact: &[] })
+}
+
+/// Block reindent: reindent exactly the lines of `block` (one form, possibly
+/// nested), in full file context — the explicit `format`-by-anchor path.
+pub fn reindent_block(source: &str, config: &FormatConfig, block: Range<usize>) -> String {
+    reindent(source, config, Touched { expand: &[], exact: std::slice::from_ref(&block) })
+}
+
+/// The general touched-region reindent (see [`Touched`]).
+pub fn reindent(source: &str, config: &FormatConfig, touched: Touched) -> String {
+    format_elisp_impl(source, config, None, Some(touched))
 }
 
 fn format_elisp_impl(
     source: &str,
     config: &FormatConfig,
     nameless: Option<&Nameless>,
-    touched: Option<&[Range<usize>]>,
+    touched: Option<Touched>,
 ) -> String {
     let parsed = parse(source, &Options::emacs_lisp());
     let mut table = builtin_indent_table();
@@ -107,9 +128,9 @@ fn format_elisp_impl(
         .collect();
     let mut new_indent = vec![0usize; count];
 
-    // For a touched-region reindent, which lines fall in a top-level form that an
-    // edit overlapped. `None` means reindent every line (whole-file format).
-    let touched_mask = touched.map(|ranges| touched_line_mask(&parsed.data, &index, count, ranges));
+    // For a touched-region reindent, which lines to rewrite. `None` means
+    // reindent every line (whole-file format).
+    let touched_mask = touched.map(|t| touched_line_mask(&parsed.data, &index, count, t));
 
     let mut lines: Vec<String> = Vec::with_capacity(count);
     for n in 1..=count as u32 {
@@ -176,27 +197,27 @@ fn render_indent(col: usize, config: &FormatConfig) -> String {
     }
 }
 
-/// Lines that fall inside a top-level form overlapping any touched byte range
-/// (ADR-0025/0028's "touched region"). A form overlaps a range when the range
-/// touches its span; a whole such form is reindented so its internal alignment
-/// stays self-consistent.
-fn touched_line_mask(
-    data: &[Datum],
-    index: &LineIndex,
-    count: usize,
-    ranges: &[Range<usize>],
-) -> Vec<bool> {
+/// The lines a touched-region reindent rewrites (ADR-0025/0028). `expand` ranges
+/// mark every line of each enclosing top-level form (so a form is reindented in
+/// full and stays self-consistent); `exact` ranges mark only the lines they
+/// span (one form by anchor).
+fn touched_line_mask(data: &[Datum], index: &LineIndex, count: usize, touched: Touched) -> Vec<bool> {
     let mut mask = vec![false; count];
-    for d in data {
-        let (fs, fe) = (d.span.start as usize, d.span.end as usize);
-        if !ranges.iter().any(|r| r.start < fe && fs <= r.end) {
-            continue;
-        }
-        let l0 = index.offset_to_line_col(fs as u32).0 as usize - 1;
-        let l1 = index.offset_to_line_col(fe.saturating_sub(1) as u32).0 as usize - 1;
+    let mut mark = |from: usize, to: usize| {
+        let l0 = index.offset_to_line_col(from as u32).0 as usize - 1;
+        let l1 = index.offset_to_line_col(to.saturating_sub(1) as u32).0 as usize - 1;
         for m in mask.iter_mut().take(l1.min(count.saturating_sub(1)) + 1).skip(l0) {
             *m = true;
         }
+    };
+    for d in data {
+        let (fs, fe) = (d.span.start as usize, d.span.end as usize);
+        if touched.expand.iter().any(|r| r.start < fe && fs <= r.end) {
+            mark(fs, fe);
+        }
+    }
+    for r in touched.exact {
+        mark(r.start, r.end);
     }
     mask
 }
@@ -706,6 +727,23 @@ kw))
         let out2 =
             reindent_range(source, &FormatConfig::default(), std::slice::from_ref(&(0..1)));
         assert_eq!(out2, "(defun a ()\n  (x))\n(defun b ()\n(y))\n");
+    }
+
+    /// `reindent_block` rewrites only the anchored (nested) form's lines, in
+    /// full context; `reindent_range` expands to the whole top-level form. Same
+    /// input, different scope.
+    #[test]
+    fn reindent_block_is_exact_reindent_range_expands() {
+        let source = "(progn\n  (bar a\nb)\n(baz c\nd))\n";
+        let bar = source.find("(bar").unwrap()..source.find("b)").unwrap() + 2;
+
+        // Block: only `(bar a / b)` reindented; `(baz c / d)` left flat.
+        let block = reindent_block(source, &FormatConfig::default(), bar.clone());
+        assert_eq!(block, "(progn\n  (bar a\n       b)\n(baz c\nd))\n");
+
+        // Range: expands to the whole `progn`, so `baz`/`d` are fixed too.
+        let range = reindent_range(source, &FormatConfig::default(), std::slice::from_ref(&bar));
+        assert_eq!(range, "(progn\n  (bar a\n       b)\n  (baz c\n       d))\n");
     }
 
     /// `lisp-body-indent` (config `body_indent`) scales every structural step:

@@ -19,7 +19,7 @@ TAG
 ## Verbs
 
 - **Shared (both modes):** `replace <anchor> <<TAG…`, `delete <anchor>`, `insert-after <anchor> <<TAG…`, `insert-before <anchor> <<TAG…`.
-- **Structural-only:** `wrap <anchor> <<TAG…` (payload = the enclosing prefix), `raise <anchor>`, `splice <anchor>`, `slurp-fwd <anchor>`, `slurp-back <anchor>`, `barf-fwd <anchor>`, `barf-back <anchor>`, `split <anchor> @<index>`, `join <anchor> <anchor2>`, `rename <anchor> <from> <to>` (rename occurrences of `from` to `to` within the anchored subtree — ADR-0003).
+- **Structural-only:** `wrap <anchor> <<TAG…` (payload = the enclosing prefix), `raise <anchor>`, `splice <anchor>`, `slurp-fwd <anchor>`, `slurp-back <anchor>`, `barf-fwd <anchor>`, `barf-back <anchor>`, `split <anchor> @<index>`, `join <anchor> <anchor2>`, `rename <anchor> <from> <to>` (rename occurrences of `from` to `to` within the anchored subtree — ADR-0003), `format <anchor>` (reindent the anchored form in place, without otherwise editing it — ADR-0028 point 3).
 
 ## MCP mirror
 

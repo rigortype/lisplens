@@ -6,11 +6,15 @@ in the dev docs** (see `AGENTS.md` → Codebase): `docs/dev/architecture.md`,
 
 ## Now
 
-- 92 tests pass, `cargo clippy --all-targets` clean; tree clean. 30 ADRs.
+- 94 tests pass, `cargo clippy --all-targets` clean; tree clean. 30 ADRs.
 - **Touched-region auto-format on Structural edit (ADR-0025/0028) is wired**:
   `apply_struct_patch` reindents the top-level forms an edit fell within
   (`format::reindent_range` + `edit::splice_tracked`), Emacs Lisp only, others
   byte-identical; Line-hash stays literal (ADR-0027).
+- **`format <anchor>` Structural verb (ADR-0028 point 3)**: reindent exactly one
+  anchored form in place — even nested, in full context (`format::reindent_block`,
+  the `exact` scope of `Touched`). Carried as an identity edit so it shares the
+  splice/conflict path. 13 Structural verbs now.
 - On **lispexp 0.5** (`dot_span` for improper-list dots — our upstream ask,
   shipped).
 - **`lisp-body-indent` / EditorConfig `indent_size` overrides** now resolved
@@ -44,10 +48,7 @@ in the dev docs** (see `AGENTS.md` → Codebase): `docs/dev/architecture.md`,
    quirk (`'(eval . FORM)`) is now handled via lispexp 0.5's `dot_span`
    (dired.el 53→35 harness diffs). To measure real fidelity, compare against the
    original file, not batch Emacs (which lacks the file's own indent specs).
-2. **Explicit block-level `format <anchor>` op** (ADR-0028 point 3) — expose
-   `reindent_range` as a Structural patch verb so an agent can tidy one form on
-   demand (the reindent component already exists).
-3. **More real-world elisp validation** — header/footer and tab-mode files;
+2. **More real-world elisp validation** — header/footer and tab-mode files;
    config resolution end-to-end on real repos.
-4. Other dialects' formatters; MCP edit JSON op-array; S-expr structural
+3. Other dialects' formatters; MCP edit JSON op-array; S-expr structural
    addresses.
