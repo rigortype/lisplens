@@ -2,7 +2,7 @@
 
 lisplens is built on [lispexp](https://crates.io/crates/lispexp). This maps each backend capability lisplens needs (with the driving lisplens ADR) to the concrete lispexp API that provides it.
 
-**Status: as of lispexp 0.2.1, every capability lisplens needs is available upstream — Structural mode is not blocked on lispexp.** This file was formerly a wishlist ("features wanted from lispexp"); the backend has since landed all of it, so it is now a satisfied-by mapping.
+**Status: as of lispexp 0.5.0, every capability lisplens needs is available upstream — Structural mode is not blocked on lispexp.** This file was formerly a wishlist ("features wanted from lispexp"); the backend has since landed all of it, so it is now a satisfied-by mapping. 0.5.0 also added `Datum::dot_span()` (improper-list dot separator) for the formatter — see [lispexp-feedback/0002](lispexp-feedback/0002-improper-list-dot-span.md).
 
 Guiding constraint (lisplens [ADR-0003](adr/0003-semantic-ceiling-form-annotator-level.md)): everything here stays at the **form-annotator level** — purely syntactic, no binding resolution, no macro expansion, no evaluation — consistent with lispexp's reader-only scope.
 
@@ -10,7 +10,8 @@ Guiding constraint (lisplens [ADR-0003](adr/0003-semantic-ceiling-form-annotator
 | --- | --- | --- |
 | Polyglot definition annotation (is-a-def, name, kind, role slots) | [0013](adr/0013-one-canonical-result-terse-text-default-json-opt-in.md), [0016](adr/0016-structural-address-is-an-s-expression-hash-shorthand.md) | `annotate::bundled_registry(Dialect)` + `annotate_tree` / `annotate_form` → `Annotated::{first,all}(Role)`; bundled builtins for Scheme/Guile/Gauche/…, Racket, Common Lisp, Emacs Lisp, Clojure, Phel, Fennel, Janet, Hy, LFE |
 | Method Dispatch signature (qualifier + specializers) | [0009](adr/0009-structural-falls-back-to-line-hash-dispatch-signature-progressive.md) | `Role::{Qualifier, DispatchValue, SpecializedArglist}` + `Annotated::specialized_params()` / `split_specialized_arglist` (lispexp ADR-0021) |
-| Indent-spec exposure (native formatter) | [0011](adr/0011-formatting-is-lisplens-responsibility-pluggable-formatter.md) | `indent::{IndentSpec, IndentTable}` (`get` / `insert` / `iter` / `merge`) |
+| Indent-spec exposure (native formatter) | [0011](adr/0011-formatting-is-lisplens-responsibility-pluggable-formatter.md) | `indent::{IndentSpec, IndentTable}` (`get` / `insert` / `iter` / `merge`); `harvest_indent_specs` (`declare`/`put`/`function-put`) |
+| Improper-list dot span (formatter dotted-tail align) | [0011](adr/0011-formatting-is-lisplens-responsibility-pluggable-formatter.md) | `Datum::dot_span()` / `DatumKind::List.dot` (lispexp 0.5.0) |
 | Parse-error diff (validate-then-write) | [0005](adr/0005-validate-then-write-reject-only-new-parse-errors.md) | `ErrorKind` (`PartialEq + Eq + Hash`, deliberately position-stable for set-diffing); `Parsed.errors: Vec<ParseError>` |
 | Line/byte index (Line-hash + diagnostics) | [0006](adr/0006-mode-first-command-surface-with-batch-edits.md), [0013](adr/0013-one-canonical-result-terse-text-default-json-opt-in.md) | `LineIndex::{new, line_count, offset_to_line_col, line_col_to_offset, line_range}` — `line_range` excludes the terminator, matching the ADR-0008 line policy |
 | EDN / manifest coverage (zero-config scan) | [0015](adr/0015-zero-config-scans-repo-local-manifests.md) | `Options::edn()` / `Dialect::Edn`, plus the per-dialect presets; lisplens parses manifests with lispexp itself |

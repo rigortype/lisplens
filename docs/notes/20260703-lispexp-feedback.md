@@ -1,5 +1,10 @@
 # Handoff: lispexp feedback from the Emacs Lisp formatter work (2026-07-03)
 
+> **Resolved (2026-07-03).** Request 1 (dot span) shipped in lispexp 0.5.0 and is
+> consumed by the formatter; Request 2 (comment spans) is served by the existing
+> `lex` layer, no upstream change. Write-up: [../lispexp-feedback/0002-improper-list-dot-span.md](../lispexp-feedback/0002-improper-list-dot-span.md).
+
+
 Handoff note for whoever picks up the upstream conversation. Captures what the
 formatter fidelity work surfaced about the [lispexp](https://crates.io/crates/lispexp)
 backend: what worked, the one concrete request, and a lower-priority nice-to-have.
