@@ -40,15 +40,23 @@ in the dev docs** (see `AGENTS.md` → Codebase): `docs/dev/architecture.md`,
 - **Nameless-aware indentation (ADR-0030)**: `format --nameless` models
   Nameless's namespace-prefix composition (`php-`→`:`, `font-lock-`→`fl:`).
 
-## Next steps (priority order)
+## Deferred (future work — not blocking first release)
 
-1. **Remaining true long tail (niche)** — nested specforms (long `if-let`
-   condition; Emacs's `(COLUMN . start)` return semantics), and package-local
-   macros absent from the bundled/harvested specs. The dotted-pair `.`-alignment
-   quirk (`'(eval . FORM)`) is now handled via lispexp 0.5's `dot_span`
-   (dired.el 53→35 harness diffs). To measure real fidelity, compare against the
-   original file, not batch Emacs (which lacks the file's own indent specs).
-2. **More real-world elisp validation** — header/footer and tab-mode files;
-   config resolution end-to-end on real repos.
-3. Other dialects' formatters; MCP edit JSON op-array; S-expr structural
-   addresses.
+The Emacs Lisp formatter is effectively complete; what remains is deliberately
+parked. In rough priority for whenever it is picked up again:
+
+1. **Formatter's true long tail (niche).** Nested specforms where Emacs's
+   `(COLUMN . start)` list-return semantics differ from the plain column (e.g. a
+   long `if-let` condition), and package-local macros absent from the
+   bundled/harvested specs. Hard to even *locate*: the batch harness buries them
+   under declare-artifacts (see the harness caveat above), so finding them needs
+   a fair reference — compare against the original file, not batch Emacs. Low
+   value, high effort; parked.
+2. **More real-world elisp validation.** Header/footer and tab-mode files;
+   config resolution end-to-end on real repos. Easy to start, open-ended; run the
+   harness on new corpora when convenient.
+3. **Single `;` inline (not own-line) comment alignment** — the own-line case is
+   done; inline comments would need the `lex` trivia layer (lispexp-feedback/0002).
+4. **Other dialects' formatters**, **MCP edit JSON op-array** (ADR-0019), and
+   **S-expr structural addresses** (ADR-0018 defers these). Each is its own
+   design-first chunk on a separate surface.
