@@ -9,6 +9,7 @@ pub mod apply;
 pub mod edit;
 pub mod hash;
 pub mod linehash;
+pub mod mcp;
 pub mod patch;
 pub mod resolve;
 pub mod search;
@@ -119,6 +120,36 @@ pub struct NodeEntry {
     pub hash: String,
     /// A one-line, truncated preview of the node's source.
     pub preview: String,
+}
+
+/// Render the Outline of `source` as terse text (`line hash kind name [sig]`,
+/// nested names indented) — shared by the CLI and MCP surfaces (ADR-0013).
+pub fn outline_text(source: &str, dialect: Dialect) -> String {
+    let mut out = String::new();
+    for entry in outline(source, dialect) {
+        let name = entry.name.as_deref().unwrap_or("-");
+        let indent = "  ".repeat(entry.depth as usize);
+        let sig = entry
+            .signature
+            .as_deref()
+            .map(|s| format!(" {s}"))
+            .unwrap_or_default();
+        out.push_str(&format!(
+            "{:>5}  {}  {}  {indent}{name}{sig}\n",
+            entry.line, entry.hash, entry.kind
+        ));
+    }
+    out
+}
+
+/// Render an [`expand`] as terse text (`line hash preview`, nested indented).
+pub fn expand_text(source: &str, dialect: Dialect, name: &str) -> String {
+    let mut out = String::new();
+    for node in expand(source, dialect, name) {
+        let indent = "  ".repeat(node.depth as usize);
+        out.push_str(&format!("{:>5}  {}  {indent}{}\n", node.line, node.hash, node.preview));
+    }
+    out
 }
 
 /// Expand every definition named `name`, listing its subtree nodes in pre-order

@@ -18,6 +18,13 @@ fn main() -> ExitCode {
         ["find", name, dir] => run_find(name, dir),
         ["refs", name] => run_refs(name, "."),
         ["refs", name, dir] => run_refs(name, dir),
+        ["mcp"] => match lisplens::mcp::serve() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("lisplens: mcp: {err}");
+                ExitCode::FAILURE
+            }
+        },
         _ => usage(),
     }
 }
@@ -31,10 +38,7 @@ fn run_struct_expand(path: PathBuf, name: &str) -> ExitCode {
         }
     };
     let dialect = lisplens::dialect_for_path(&path);
-    for node in lisplens::expand(&source, dialect, name) {
-        let indent = "  ".repeat(node.depth as usize);
-        println!("{:>5}  {}  {indent}{}", node.line, node.hash, node.preview);
-    }
+    print!("{}", lisplens::expand_text(&source, dialect, name));
     ExitCode::SUCCESS
 }
 
@@ -59,20 +63,7 @@ fn run_struct_read(path: PathBuf) -> ExitCode {
         }
     };
     let dialect = lisplens::dialect_for_path(&path);
-    for entry in lisplens::outline(&source, dialect) {
-        let name = entry.name.as_deref().unwrap_or("-");
-        // ADR-0013 Outline columns: line, hash, kind, name (name last). Nesting
-        // is shown by indenting the name column (name can contain spaces, so it
-        // must stay last); a method's Dispatch signature follows the name
-        // (ADR-0022).
-        let indent = "  ".repeat(entry.depth as usize);
-        let sig = entry
-            .signature
-            .as_deref()
-            .map(|s| format!(" {s}"))
-            .unwrap_or_default();
-        println!("{:>5}  {}  {}  {indent}{name}{sig}", entry.line, entry.hash, entry.kind);
-    }
+    print!("{}", lisplens::outline_text(&source, dialect));
     ExitCode::SUCCESS
 }
 
@@ -133,9 +124,7 @@ fn run_struct_edit(path: PathBuf) -> ExitCode {
 fn run_find(name: &str, dir: &str) -> ExitCode {
     match lisplens::search::find_definitions(std::path::Path::new(dir), name) {
         Ok(hits) => {
-            for hit in hits {
-                println!("{}:{}:{} {} {}", hit.file.display(), hit.line, hit.hash, hit.kind, hit.name);
-            }
+            print!("{}", lisplens::search::hits_text(&hits));
             ExitCode::SUCCESS
         }
         Err(err) => {
@@ -148,10 +137,7 @@ fn run_find(name: &str, dir: &str) -> ExitCode {
 fn run_refs(name: &str, dir: &str) -> ExitCode {
     match lisplens::search::find_symbol(std::path::Path::new(dir), name) {
         Ok(occurrences) => {
-            for occ in occurrences {
-                let class = if occ.in_code { "code" } else { "data" };
-                println!("{}:{}:{} {class} {name}", occ.file.display(), occ.line, occ.hash);
-            }
+            print!("{}", lisplens::search::occurrences_text(&occurrences, name));
             ExitCode::SUCCESS
         }
         Err(err) => {
@@ -169,6 +155,7 @@ fn usage() -> ExitCode {
     eprintln!("  lisplens struct edit <file>   apply a Structural patch from stdin");
     eprintln!("  lisplens find <name> [dir]    find definitions by name (default dir: .)");
     eprintln!("  lisplens refs <name> [dir]    find symbol occurrences (code/data tagged)");
+    eprintln!("  lisplens mcp                  run the MCP server over stdio");
     eprintln!();
     eprintln!("Skeleton stage — see CONTEXT.md and docs/adr/ for the full design.");
     ExitCode::FAILURE

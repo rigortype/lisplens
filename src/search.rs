@@ -102,6 +102,24 @@ pub fn find_symbol(root: &Path, symbol: &str) -> std::io::Result<Vec<Occurrence>
     Ok(occurrences)
 }
 
+/// Render definition hits as `file:line:hash kind name` lines.
+pub fn hits_text(hits: &[Hit]) -> String {
+    hits.iter()
+        .map(|h| format!("{}:{}:{} {} {}\n", h.file.display(), h.line, h.hash, h.kind, h.name))
+        .collect()
+}
+
+/// Render symbol occurrences as `file:line:hash code|data name` lines.
+pub fn occurrences_text(occurrences: &[Occurrence], name: &str) -> String {
+    occurrences
+        .iter()
+        .map(|o| {
+            let class = if o.in_code { "code" } else { "data" };
+            format!("{}:{}:{} {class} {name}\n", o.file.display(), o.line, o.hash)
+        })
+        .collect()
+}
+
 /// Recurse `dir`, calling `visit` for each regular file. `DirEntry::file_type`
 /// does not follow symlinks, so symlinked directories are not descended (no
 /// cycles). Hidden directories are skipped.
