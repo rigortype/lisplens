@@ -6,6 +6,7 @@
 //! the pluggable formatter — lives in `CONTEXT.md` and `docs/adr/`.
 
 pub mod apply;
+pub mod config;
 pub mod edit;
 pub mod format;
 pub mod hash;

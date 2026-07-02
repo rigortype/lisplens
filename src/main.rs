@@ -137,7 +137,8 @@ fn run_format(path: PathBuf) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let formatted = lisplens::format::format_elisp(&source);
+    let config = lisplens::config::resolve(&path, &source);
+    let formatted = lisplens::format::format_elisp(&source, &config);
     if formatted != source {
         if let Err(err) = lisplens::write::write_atomically(&path, &formatted) {
             eprintln!("lisplens: {}: {err}", path.display());

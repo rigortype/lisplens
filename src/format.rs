@@ -20,6 +20,8 @@
 use lispexp::indent::{harvest_indent_specs, IndentSpec, IndentTable};
 use lispexp::{parse, Datum, DatumKind, LineIndex, Options};
 
+use crate::config::FormatConfig;
+
 const BODY: usize = 2; // lisp-body-indent
 
 /// Column arithmetic that accounts for reindentation already applied to earlier
@@ -49,7 +51,7 @@ impl Cols<'_> {
 /// Reindent whole Emacs Lisp `source`, returning the formatted text. Leading
 /// whitespace on each line is recomputed; tokens and line order are untouched,
 /// so this never changes what the file parses to.
-pub fn format_elisp(source: &str) -> String {
+pub fn format_elisp(source: &str, config: &FormatConfig) -> String {
     let parsed = parse(source, &Options::emacs_lisp());
     let mut table = builtin_indent_table();
     table.merge(harvest_indent_specs(source));
@@ -89,10 +91,22 @@ pub fn format_elisp(source: &str) -> String {
                 }
             };
             new_indent[i] = indent;
-            lines.push(format!("{}{trimmed}", " ".repeat(indent)));
+            lines.push(format!("{}{trimmed}", render_indent(indent, config)));
         }
     }
     lines.join("\n")
+}
+
+/// Render an indent of `col` columns as spaces, or as tabs plus trailing spaces
+/// when `indent-tabs-mode` is on (ADR-0029).
+fn render_indent(col: usize, config: &FormatConfig) -> String {
+    if config.indent_tabs && config.tab_width > 0 {
+        let tabs = col / config.tab_width;
+        let spaces = col % config.tab_width;
+        format!("{}{}", "\t".repeat(tabs), " ".repeat(spaces))
+    } else {
+        " ".repeat(col)
+    }
 }
 
 /// The deepest enclosing list whose span strictly contains `offset`.
@@ -281,7 +295,7 @@ arg3)
   (a)
   (b))
 ";
-        assert_eq!(format_elisp(input), expected);
+        assert_eq!(format_elisp(input, &FormatConfig::default()), expected);
     }
 
     #[test]
@@ -318,19 +332,19 @@ c)
               b)
        c)
 ";
-        assert_eq!(format_elisp(input), expected);
+        assert_eq!(format_elisp(input, &FormatConfig::default()), expected);
     }
 
     #[test]
     fn already_formatted_is_a_fixed_point() {
         let formatted = "(defun foo (x)\n  (bar x))\n";
-        assert_eq!(format_elisp(formatted), formatted);
+        assert_eq!(format_elisp(formatted, &FormatConfig::default()), formatted);
     }
 
     #[test]
     fn a_multiline_string_is_left_untouched() {
         let src = "(defun f ()\n  \"a\n    b\")\n";
         // The string's second line must not be reindented.
-        assert!(format_elisp(src).contains("\n    b\""));
+        assert!(format_elisp(src, &FormatConfig::default()).contains("\n    b\""));
     }
 }

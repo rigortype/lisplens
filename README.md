@@ -33,7 +33,9 @@ lisplens struct edit <file>          apply a Structural patch from stdin
 lisplens line   edit <file>          apply a Line-hash patch from stdin
 lisplens find <name> [dir]           find definitions by name across a project
 lisplens refs <name> [dir]           find symbol occurrences (code/data tagged)
-lisplens format <file>               reindent an Emacs Lisp file (native indenter)
+lisplens format <file>               reindent an Emacs Lisp file (honors
+                                     indent-tabs-mode / tab-width from file-local
+                                     vars, .dir-locals.el, and .editorconfig)
 lisplens mcp                         run the MCP server over stdio
 ```
 

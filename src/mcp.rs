@@ -145,7 +145,8 @@ fn run_tool(name: &str, args: &Value) -> Result<String, String> {
                 return Err("format currently supports Emacs Lisp (.el) only".to_string());
             }
             let source = read(file)?;
-            let formatted = crate::format::format_elisp(&source);
+            let config = crate::config::resolve(Path::new(file), &source);
+            let formatted = crate::format::format_elisp(&source, &config);
             if formatted != source {
                 crate::write::write_atomically(Path::new(file), &formatted)
                     .map_err(|e| format!("{file}: {e}"))?;
