@@ -8,20 +8,21 @@ use std::process::ExitCode;
 
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
-    match args.next().as_deref() {
-        Some("outline") => match args.next() {
-            Some(file) => run_outline(PathBuf::from(file)),
-            None => usage(),
-        },
-        Some("read") => match args.next() {
-            Some(file) => run_read(PathBuf::from(file)),
-            None => usage(),
-        },
+    let mode = args.next();
+    let verb = args.next();
+    let file = args.next();
+    match (mode.as_deref(), verb.as_deref(), file) {
+        (Some("struct"), Some("read"), Some(file)) => run_struct_read(PathBuf::from(file)),
+        (Some("line"), Some("read"), Some(file)) => run_line_read(PathBuf::from(file)),
+        (Some("line" | "struct"), Some("edit"), _) => {
+            eprintln!("lisplens: `edit` is not implemented yet");
+            ExitCode::FAILURE
+        }
         _ => usage(),
     }
 }
 
-fn run_read(path: PathBuf) -> ExitCode {
+fn run_line_read(path: PathBuf) -> ExitCode {
     let source = match std::fs::read_to_string(&path) {
         Ok(source) => source,
         Err(err) => {
@@ -33,7 +34,7 @@ fn run_read(path: PathBuf) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn run_outline(path: PathBuf) -> ExitCode {
+fn run_struct_read(path: PathBuf) -> ExitCode {
     let source = match std::fs::read_to_string(&path) {
         Ok(source) => source,
         Err(err) => {
@@ -55,8 +56,9 @@ fn run_outline(path: PathBuf) -> ExitCode {
 
 fn usage() -> ExitCode {
     eprintln!("usage:");
-    eprintln!("  lisplens outline <file>   structural outline of top-level definitions");
-    eprintln!("  lisplens read <file>      line-hash read ([path#hash] + N:hash|content)");
+    eprintln!("  lisplens struct read <file>   structural Outline (line hash kind name)");
+    eprintln!("  lisplens line read <file>     line-hash read ([path#hash] + N:hash|content)");
+    eprintln!("  lisplens {{line|struct}} edit    (not implemented yet)");
     eprintln!();
     eprintln!("Skeleton stage — see CONTEXT.md and docs/adr/ for the full design.");
     ExitCode::FAILURE
