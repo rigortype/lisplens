@@ -107,6 +107,65 @@ fn span_text<'a>(source: &'a str, datum: &Datum) -> &'a str {
     &source[datum.span.start as usize..datum.span.end as usize]
 }
 
+/// One node of an [`expand`]: its start line, depth below the definition, an
+/// anchor hash, and a one-line preview of its source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodeEntry {
+    /// 1-based start line.
+    pub line: u32,
+    /// Depth below the expanded definition (0 = the definition itself).
+    pub depth: u32,
+    /// 4-hex anchor hash over the node's verbatim span (ADR-0008).
+    pub hash: String,
+    /// A one-line, truncated preview of the node's source.
+    pub preview: String,
+}
+
+/// Expand every definition named `name`, listing its subtree nodes in pre-order
+/// with an anchor hash each — so inner nodes become addressable for Structural
+/// edits (the expandable Lens, ADR-0013).
+pub fn expand(source: &str, dialect: Dialect, name: &str) -> Vec<NodeEntry> {
+    let parsed = parse(source, &Options::for_dialect(dialect));
+    let registry = bundled_registry(dialect);
+    let mut out = Vec::new();
+    for form in annotate_tree(&parsed.data, &registry) {
+        if form.first(Role::Name).and_then(name_text).as_deref() == Some(name) {
+            walk_node(source, form.form, 0, &mut out);
+        }
+    }
+    out
+}
+
+fn walk_node(source: &str, datum: &Datum, depth: u32, out: &mut Vec<NodeEntry>) {
+    out.push(NodeEntry {
+        line: datum.line,
+        depth,
+        hash: anchor_hash(span_text(source, datum).as_bytes()),
+        preview: preview(span_text(source, datum)),
+    });
+    match &datum.kind {
+        DatumKind::List { items, .. } => {
+            for item in items {
+                walk_node(source, item, depth + 1, out);
+            }
+        }
+        DatumKind::Prefixed { inner, .. } => walk_node(source, inner, depth + 1, out),
+        _ => {}
+    }
+}
+
+/// Collapse whitespace and truncate to a short one-line preview.
+fn preview(text: &str) -> String {
+    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut chars = collapsed.chars();
+    let head: String = chars.by_ref().take(60).collect();
+    if chars.next().is_some() {
+        format!("{head}…")
+    } else {
+        head
+    }
+}
+
 /// The verbatim source bytes of `datum`'s span.
 fn span_bytes<'a>(source: &'a str, datum: &Datum) -> &'a [u8] {
     &source.as_bytes()[datum.span.start as usize..datum.span.end as usize]
@@ -177,6 +236,20 @@ mod tests {
         assert_eq!(entries[0].depth, 0);
         assert_eq!(entries[0].hash.len(), 4);
         assert_eq!(entries[1].name.as_deref(), Some("pi"));
+    }
+
+    #[test]
+    fn expand_lists_inner_nodes_with_hashes() {
+        let src = "(define (square x) (* x x))\n";
+        let nodes = expand(src, Dialect::Scheme, "square");
+
+        assert!(nodes.len() >= 2, "{nodes:?}");
+        assert_eq!(nodes[0].depth, 0);
+        assert!(nodes[0].preview.contains("define"));
+        assert!(nodes.iter().any(|n| n.preview.contains("* x x")));
+        assert!(nodes.iter().all(|n| n.hash.len() == 4));
+        // an inner node is deeper than the definition root
+        assert!(nodes.iter().any(|n| n.depth > 0));
     }
 
     #[test]

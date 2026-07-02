@@ -7,18 +7,33 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    let mut args = std::env::args().skip(1);
-    let mode = args.next();
-    let verb = args.next();
-    let file = args.next();
-    match (mode.as_deref(), verb.as_deref(), file) {
-        (Some("struct"), Some("read"), Some(file)) => run_struct_read(PathBuf::from(file)),
-        (Some("line"), Some("read"), Some(file)) => run_line_read(PathBuf::from(file)),
-        (Some("line"), Some("edit"), Some(file)) => run_line_edit(PathBuf::from(file)),
-        (Some("struct"), Some("edit"), Some(file)) => run_struct_edit(PathBuf::from(file)),
-        (Some("find"), Some(name), dir) => run_find(name, dir.as_deref().unwrap_or(".")),
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
+        ["struct", "read", file] => run_struct_read(PathBuf::from(file)),
+        ["struct", "read", file, name] => run_struct_expand(PathBuf::from(file), name),
+        ["line", "read", file] => run_line_read(PathBuf::from(file)),
+        ["line", "edit", file] => run_line_edit(PathBuf::from(file)),
+        ["struct", "edit", file] => run_struct_edit(PathBuf::from(file)),
+        ["find", name] => run_find(name, "."),
+        ["find", name, dir] => run_find(name, dir),
         _ => usage(),
     }
+}
+
+fn run_struct_expand(path: PathBuf, name: &str) -> ExitCode {
+    let source = match std::fs::read_to_string(&path) {
+        Ok(source) => source,
+        Err(err) => {
+            eprintln!("lisplens: {}: {err}", path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let dialect = lisplens::dialect_for_path(&path);
+    for node in lisplens::expand(&source, dialect, name) {
+        let indent = "  ".repeat(node.depth as usize);
+        println!("{:>5}  {}  {indent}{}", node.line, node.hash, node.preview);
+    }
+    ExitCode::SUCCESS
 }
 
 fn run_line_read(path: PathBuf) -> ExitCode {
@@ -130,7 +145,7 @@ fn run_find(name: &str, dir: &str) -> ExitCode {
 
 fn usage() -> ExitCode {
     eprintln!("usage:");
-    eprintln!("  lisplens struct read <file>   structural Outline (line hash kind name)");
+    eprintln!("  lisplens struct read <file> [name]   Outline, or expand a definition by name");
     eprintln!("  lisplens line read <file>     line-hash read ([path#hash] + N:hash|content)");
     eprintln!("  lisplens line edit <file>     apply a Line-hash patch from stdin");
     eprintln!("  lisplens struct edit <file>   apply a Structural patch from stdin");
