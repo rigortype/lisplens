@@ -11,6 +11,7 @@ pub mod hash;
 pub mod linehash;
 pub mod patch;
 pub mod resolve;
+pub mod search;
 pub mod structural;
 pub mod write;
 
@@ -133,12 +134,18 @@ pub fn options_for_path(path: &Path) -> Options {
 /// Zero-config dialect guess from a file extension (ADR-0004, first pass).
 /// Unknown extensions fall back to a permissive Scheme superset.
 pub fn dialect_for_path(path: &Path) -> Dialect {
+    recognized_dialect(path).unwrap_or(Dialect::SchemeSuperset)
+}
+
+/// The dialect for a path's extension, or `None` if it is not a recognized Lisp
+/// file — used by search to skip non-Lisp files (ADR-0004).
+pub fn recognized_dialect(path: &Path) -> Option<Dialect> {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or_default()
         .to_ascii_lowercase();
-    match ext.as_str() {
+    Some(match ext.as_str() {
         "scm" | "ss" | "sls" | "sps" | "sld" => Dialect::Scheme,
         "el" => Dialect::EmacsLisp,
         "clj" | "cljs" | "cljc" => Dialect::Clojure,
@@ -150,8 +157,8 @@ pub fn dialect_for_path(path: &Path) -> Dialect {
         "hy" => Dialect::Hy,
         "lfe" => Dialect::Lfe,
         "phel" => Dialect::Phel,
-        _ => Dialect::SchemeSuperset,
-    }
+        _ => return None,
+    })
 }
 
 #[cfg(test)]

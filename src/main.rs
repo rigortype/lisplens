@@ -16,6 +16,7 @@ fn main() -> ExitCode {
         (Some("line"), Some("read"), Some(file)) => run_line_read(PathBuf::from(file)),
         (Some("line"), Some("edit"), Some(file)) => run_line_edit(PathBuf::from(file)),
         (Some("struct"), Some("edit"), Some(file)) => run_struct_edit(PathBuf::from(file)),
+        (Some("find"), Some(name), dir) => run_find(name, dir.as_deref().unwrap_or(".")),
         _ => usage(),
     }
 }
@@ -112,12 +113,28 @@ fn run_struct_edit(path: PathBuf) -> ExitCode {
     report(lisplens::patch::apply_struct_patch(&path, &patch, &options))
 }
 
+fn run_find(name: &str, dir: &str) -> ExitCode {
+    match lisplens::search::find_definitions(std::path::Path::new(dir), name) {
+        Ok(hits) => {
+            for hit in hits {
+                println!("{}:{}:{} {} {}", hit.file.display(), hit.line, hit.hash, hit.kind, hit.name);
+            }
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("lisplens: {dir}: {err}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn usage() -> ExitCode {
     eprintln!("usage:");
     eprintln!("  lisplens struct read <file>   structural Outline (line hash kind name)");
     eprintln!("  lisplens line read <file>     line-hash read ([path#hash] + N:hash|content)");
     eprintln!("  lisplens line edit <file>     apply a Line-hash patch from stdin");
     eprintln!("  lisplens struct edit <file>   apply a Structural patch from stdin");
+    eprintln!("  lisplens find <name> [dir]    find definitions by name (default dir: .)");
     eprintln!();
     eprintln!("Skeleton stage — see CONTEXT.md and docs/adr/ for the full design.");
     ExitCode::FAILURE
