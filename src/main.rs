@@ -16,6 +16,8 @@ fn main() -> ExitCode {
         ["struct", "edit", file] => run_struct_edit(PathBuf::from(file)),
         ["find", name] => run_find(name, "."),
         ["find", name, dir] => run_find(name, dir),
+        ["refs", name] => run_refs(name, "."),
+        ["refs", name, dir] => run_refs(name, dir),
         _ => usage(),
     }
 }
@@ -143,6 +145,22 @@ fn run_find(name: &str, dir: &str) -> ExitCode {
     }
 }
 
+fn run_refs(name: &str, dir: &str) -> ExitCode {
+    match lisplens::search::find_symbol(std::path::Path::new(dir), name) {
+        Ok(occurrences) => {
+            for occ in occurrences {
+                let class = if occ.in_code { "code" } else { "data" };
+                println!("{}:{}:{} {class} {name}", occ.file.display(), occ.line, occ.hash);
+            }
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("lisplens: {dir}: {err}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn usage() -> ExitCode {
     eprintln!("usage:");
     eprintln!("  lisplens struct read <file> [name]   Outline, or expand a definition by name");
@@ -150,6 +168,7 @@ fn usage() -> ExitCode {
     eprintln!("  lisplens line edit <file>     apply a Line-hash patch from stdin");
     eprintln!("  lisplens struct edit <file>   apply a Structural patch from stdin");
     eprintln!("  lisplens find <name> [dir]    find definitions by name (default dir: .)");
+    eprintln!("  lisplens refs <name> [dir]    find symbol occurrences (code/data tagged)");
     eprintln!();
     eprintln!("Skeleton stage — see CONTEXT.md and docs/adr/ for the full design.");
     ExitCode::FAILURE

@@ -7,6 +7,9 @@
 
 use std::path::{Path, PathBuf};
 
+use lispexp::{Class, DatumKind, Options, Walk};
+
+use crate::hash::anchor_hash;
 use crate::{outline, recognized_dialect};
 
 /// A definition found by [`find_definitions`], with the anchor an edit needs.
@@ -49,6 +52,54 @@ pub fn find_definitions(root: &Path, name: &str) -> std::io::Result<Vec<Hit>> {
         }
     })?;
     Ok(hits)
+}
+
+/// One symbol occurrence found by [`find_symbol`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Occurrence {
+    /// The file the symbol occurs in.
+    pub file: PathBuf,
+    /// 1-based line.
+    pub line: u32,
+    /// The occurrence's anchor hash — directly usable as an edit anchor.
+    pub hash: String,
+    /// Whether the occurrence sits in code (`true`) or in quoted data
+    /// (`false`), per lispexp's code-vs-data walk (ADR-0010).
+    pub in_code: bool,
+}
+
+/// Find every occurrence of the symbol `symbol` under `root`, across recognized
+/// Lisp files, tagging each as code or data (ADR-0010). Descends into both so
+/// nothing is missed; the `in_code` flag surfaces the classification.
+pub fn find_symbol(root: &Path, symbol: &str) -> std::io::Result<Vec<Occurrence>> {
+    let mut occurrences = Vec::new();
+    walk_files(root, &mut |path| {
+        let Some(dialect) = recognized_dialect(path) else {
+            return;
+        };
+        let Ok(source) = std::fs::read_to_string(path) else {
+            return;
+        };
+        let parsed = lispexp::parse(&source, &Options::for_dialect(dialect));
+        let mut local = Vec::new();
+        lispexp::walk(&parsed.data, |datum, class| {
+            if let DatumKind::Symbol(s) = &datum.kind {
+                if *s == symbol {
+                    let bytes =
+                        &source.as_bytes()[datum.span.start as usize..datum.span.end as usize];
+                    local.push(Occurrence {
+                        file: path.to_path_buf(),
+                        line: datum.line,
+                        hash: anchor_hash(bytes),
+                        in_code: class == Class::Code,
+                    });
+                }
+            }
+            Walk::Descend
+        });
+        occurrences.extend(local);
+    })?;
+    Ok(occurrences)
 }
 
 /// Recurse `dir`, calling `visit` for each regular file. `DirEntry::file_type`
@@ -94,6 +145,17 @@ mod tests {
         assert!(hits.iter().all(|h| h.name == "target"));
         assert!(hits.iter().any(|h| h.kind == "defun"));
         assert!(hits.iter().any(|h| h.kind == "define"));
+    }
+
+    #[test]
+    fn find_symbol_tags_code_vs_data_occurrences() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.scm"), "(foo bar)\n'(foo baz)\n(list foo)\n").unwrap();
+
+        let occ = find_symbol(dir.path(), "foo").unwrap();
+        assert_eq!(occ.len(), 3, "{occ:?}");
+        assert_eq!(occ.iter().filter(|o| o.in_code).count(), 2);
+        assert_eq!(occ.iter().filter(|o| !o.in_code).count(), 1);
     }
 
     #[test]
