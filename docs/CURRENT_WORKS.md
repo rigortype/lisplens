@@ -39,6 +39,11 @@ in the dev docs** (see `AGENTS.md` → Codebase): `docs/dev/architecture.md`,
   is far above the raw byte-exact count. See [[formatter-harness-declare-caveat]].
 - **Nameless-aware indentation (ADR-0030)**: `format --nameless` models
   Nameless's namespace-prefix composition (`php-`→`:`, `font-lock-`→`fl:`).
+- **Dogfooded on php-mode** (fixed its Emacs-32 build via lisplens patches;
+  `docs/notes/20260703-dogfooding-php-mode.md`). Surfaced two findings: the
+  bundle now includes `cc-mode` specs (`c-lang-defconst` etc., 342 entries) —
+  **fixed**; and Structural-edit auto-format is not Nameless-aware — **standing
+  limitation** (edit Nameless files with Line-hash patches for now).
 
 ## Deferred (future work — not blocking first release)
 

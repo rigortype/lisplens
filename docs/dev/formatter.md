@@ -53,7 +53,8 @@ nested code.
 ## Indent specs
 
 Standard specs are **bundled** in `NUMBER_SPECS` / `DEFUN_SPECS` in
-`src/format.rs` (326 entries). File-local `(declare (indent …))` and
+`src/format.rs` (342 entries — 326 core + 16 from `cc-mode` et al., see below).
+File-local `(declare (indent …))` and
 `(put 'sym 'lisp-indent-function …)` are layered on via lispexp
 `harvest_indent_specs`. Rendering uses `FormatConfig` (spaces, or tabs +
 trailing spaces).
@@ -66,6 +67,7 @@ trailing spaces).
 ;; dump.el
 (require 'cl-lib)(require 'cl-macs)(require 'pcase)(require 'subr-x)
 (require 'seq)(require 'let-alist)(require 'rx)(require 'map)(require 'gv)(require 'cl-generic)
+(require 'cc-mode)  ; common core package; adds c-lang-defconst etc. (dogfooded on php-mode)
 (mapatoms (lambda (s)
   (let ((v (and (or (fboundp s) (macrop s))
                 (function-get s 'lisp-indent-function 'macro))))
@@ -174,3 +176,12 @@ span is an `expand` range (pull in the whole enclosing top-level form), while th
 full context (`reindent_block`). The `format` op is carried as an *identity edit*
 (replace the node with its own bytes) so `splice_tracked` hands back its
 post-splice span for free and any conflict with another op is caught by splice.
+
+**Limitation — auto-format is not Nameless-aware.** The edit path calls
+`reindent` with no Nameless context (Nameless is a `format --nameless` CLI
+opt-in, not part of the resolved `FormatConfig`). Structural-editing a
+Nameless-indented file (e.g. `php-mode/lisp`) would reindent its touched form to
+*non*-Nameless columns — corruption. Until Nameless becomes a resolvable config
+that flows into the edit path, edit such files with Line-hash patches (literal,
+ADR-0027). Surfaced dogfooding php-mode — see
+`docs/notes/20260703-dogfooding-php-mode.md`.

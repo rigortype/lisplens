@@ -515,6 +515,15 @@ const NUMBER_SPECS: &[(&str, u32)] = &[
     ("with-temp-file", 1), ("with-temp-message", 1), ("with-timeout", 1),
     ("with-undo-amalgamate", 0), ("with-window-non-dedicated", 1), ("with-work-buffer", 0),
     ("with-wrapper-hook", 2), ("without-remote-files", 0), ("without-restriction", 0),
+    // cc-mode and other common core packages, captured with `(require 'cc-mode)`
+    // added to the dump (see docs/dev/formatter.md). `c-lang-defconst` is what
+    // php-mode uses heavily.
+    ("c-define-abbrev-table", 1), ("c-font-lock-doc-comments", 2),
+    ("c-fontify-types-and-refs", 1), ("c-lang-defconst", 1),
+    ("c-let*-maybe-max-specpdl-size", 1), ("c-make-keywords-re", 1), ("c-safe", 0),
+    ("c-save-buffer-state", 1), ("c-tentative-buffer-changes", 0), ("c-with-syntax-table", 1),
+    ("cc-eval-when-compile", 0), ("org-compatible-face", 1),
+    ("org-fold-core-ignore-fragility-checks", 0), ("org-persist-collection-let", 1),
 ];
 
 #[rustfmt::skip]
@@ -539,6 +548,8 @@ const DEFUN_SPECS: &[&str] = &[
     "transient-remove-suffix", "transient-replace-suffix", "use-package",
     "use-package-only-one", "which-key-add-keymap-based-replacements",
     "which-key-add-major-mode-key-based-replacements",
+    // cc-mode / use-package, captured with `(require 'cc-mode)` in the dump.
+    "defcustom-c-stylevar", "use-package-as-one",
 ];
 
 #[cfg(test)]
