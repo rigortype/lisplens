@@ -13,8 +13,24 @@ fn main() -> ExitCode {
             Some(file) => run_outline(PathBuf::from(file)),
             None => usage(),
         },
+        Some("read") => match args.next() {
+            Some(file) => run_read(PathBuf::from(file)),
+            None => usage(),
+        },
         _ => usage(),
     }
+}
+
+fn run_read(path: PathBuf) -> ExitCode {
+    let source = match std::fs::read_to_string(&path) {
+        Ok(source) => source,
+        Err(err) => {
+            eprintln!("lisplens: {}: {err}", path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    print!("{}", lisplens::linehash::read(&path.display().to_string(), &source));
+    ExitCode::SUCCESS
 }
 
 fn run_outline(path: PathBuf) -> ExitCode {
@@ -34,7 +50,9 @@ fn run_outline(path: PathBuf) -> ExitCode {
 }
 
 fn usage() -> ExitCode {
-    eprintln!("usage: lisplens outline <file>");
+    eprintln!("usage:");
+    eprintln!("  lisplens outline <file>   structural outline of top-level definitions");
+    eprintln!("  lisplens read <file>      line-hash read ([path#hash] + N:hash|content)");
     eprintln!();
     eprintln!("Skeleton stage — see CONTEXT.md and docs/adr/ for the full design.");
     ExitCode::FAILURE

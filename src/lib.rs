@@ -5,6 +5,9 @@
 //! edits, drift detection, the pluggable formatter — lives in `CONTEXT.md` and
 //! `docs/adr/`.
 
+pub mod hash;
+pub mod linehash;
+
 use std::path::Path;
 
 use lispexp::{parse, Datum, DatumKind, Options};
