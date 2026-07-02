@@ -20,7 +20,7 @@
 
 use std::path::Path;
 
-use lispexp::{LineIndex, Options};
+use lispexp::{Datum, DatumKind, LineIndex, Options};
 
 use crate::edit::{splice, Edit, SpliceError};
 use crate::hash::{anchor_hash, file_hash};
@@ -288,6 +288,12 @@ enum SVerb {
     Wrap,
     Raise,
     Splice,
+    SlurpFwd,
+    SlurpBack,
+    BarfFwd,
+    BarfBack,
+    Split,
+    Join,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -295,11 +301,15 @@ struct SOpSpec {
     verb: SVerb,
     anchor: Anchor,
     text: Option<String>,
+    /// Child index for `split`.
+    index: Option<usize>,
+    /// The second list for `join`.
+    anchor2: Option<Anchor>,
 }
 
-/// A parsed Structural Patch. Node-context ops (`replace`, `delete`, `wrap`,
-/// `raise`, `splice`) are supported; the sibling-context ops (`slurp` / `barf`
-/// / `split` / `join`) are not yet wired.
+/// A parsed Structural Patch, covering the full op set (ADR-0012, ADR-0021):
+/// `replace`, `delete`, `wrap`, `raise`, `splice`, `slurp-fwd`, `slurp-back`,
+/// `barf-fwd`, `barf-back`, `split`, `join`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StructPatch {
     /// The snapshot the patch was built against.
@@ -323,21 +333,42 @@ pub fn parse_struct_patch(input: &str) -> Result<StructPatch, PatchError> {
             Some("wrap") => SVerb::Wrap,
             Some("raise") => SVerb::Raise,
             Some("splice") => SVerb::Splice,
+            Some("slurp-fwd") => SVerb::SlurpFwd,
+            Some("slurp-back") => SVerb::SlurpBack,
+            Some("barf-fwd") => SVerb::BarfFwd,
+            Some("barf-back") => SVerb::BarfBack,
+            Some("split") => SVerb::Split,
+            Some("join") => SVerb::Join,
             _ => return Err(PatchError::BadOp(line.to_string())),
         };
-        let anchor = parse_anchor(tokens.next().ok_or_else(|| PatchError::BadOp(line.to_string()))?)?;
-        let text = if matches!(verb, SVerb::Replace | SVerb::Wrap) {
-            let tag = tokens
-                .next()
-                .and_then(|t| t.strip_prefix("<<"))
-                .filter(|t| !t.is_empty())
-                .ok_or_else(|| PatchError::BadOp(line.to_string()))?
-                .to_string();
-            Some(read_heredoc(&mut lines, &tag)?)
-        } else {
-            None
-        };
-        ops.push(SOpSpec { verb, anchor, text });
+        let bad = || PatchError::BadOp(line.to_string());
+        let anchor = parse_anchor(tokens.next().ok_or_else(bad)?)?;
+
+        let mut text = None;
+        let mut index = None;
+        let mut anchor2 = None;
+        match verb {
+            SVerb::Replace | SVerb::Wrap => {
+                let tag = tokens
+                    .next()
+                    .and_then(|t| t.strip_prefix("<<"))
+                    .filter(|t| !t.is_empty())
+                    .ok_or_else(bad)?
+                    .to_string();
+                text = Some(read_heredoc(&mut lines, &tag)?);
+            }
+            SVerb::Split => {
+                let n = tokens
+                    .next()
+                    .and_then(|t| t.strip_prefix('@'))
+                    .and_then(|s| s.parse::<usize>().ok())
+                    .ok_or_else(bad)?;
+                index = Some(n);
+            }
+            SVerb::Join => anchor2 = Some(parse_anchor(tokens.next().ok_or_else(bad)?)?),
+            _ => {}
+        }
+        ops.push(SOpSpec { verb, anchor, text, index, anchor2 });
     }
     Ok(StructPatch { file_hash, ops })
 }
@@ -366,7 +397,7 @@ pub fn apply_struct_patch(
                 hash: op.anchor.hash.clone(),
             }
         })?;
-        edits.extend(build_struct_edits(&source, op, &located)?);
+        edits.extend(build_struct_edits(&source, &parsed.data, op, &located)?);
     }
 
     let new_content = splice(&source, edits).map_err(ApplyError::Splice)?;
@@ -378,27 +409,65 @@ pub fn apply_struct_patch(
 
 fn build_struct_edits(
     source: &str,
+    data: &[Datum],
     op: &SOpSpec,
     located: &crate::resolve::Located,
 ) -> Result<Vec<Edit>, ApplyError> {
+    use crate::structural as st;
     let node = located.node;
     let span = node.span.start as usize..node.span.end as usize;
+    let na = |msg: &str| ApplyError::NotApplicable(msg.to_string());
     Ok(match op.verb {
         SVerb::Replace => vec![Edit {
             range: span,
             text: op.text.clone().unwrap_or_default(),
         }],
         SVerb::Delete => vec![Edit { range: span, text: String::new() }],
-        SVerb::Wrap => crate::structural::wrap(node, op.text.as_deref().unwrap_or_default()),
+        SVerb::Wrap => st::wrap(node, op.text.as_deref().unwrap_or_default()),
         SVerb::Raise => {
-            let parent = located
-                .parent
-                .ok_or_else(|| ApplyError::NotApplicable("raise: node has no parent".into()))?;
-            crate::structural::raise(source, parent, node)
+            let parent = located.parent.ok_or_else(|| na("raise: node has no parent"))?;
+            st::raise(source, parent, node)
         }
-        SVerb::Splice => crate::structural::splice(source, node)
-            .ok_or_else(|| ApplyError::NotApplicable("splice: node is not a list".into()))?,
+        SVerb::Splice => st::splice(source, node).ok_or_else(|| na("splice: node is not a list"))?,
+        SVerb::SlurpFwd => {
+            let next = sibling(located, 1).ok_or_else(|| na("slurp-fwd: no next sibling"))?;
+            st::slurp_forward(node, next).ok_or_else(|| na("slurp-fwd: node is not a list"))?
+        }
+        SVerb::SlurpBack => {
+            let prev = sibling(located, -1).ok_or_else(|| na("slurp-back: no previous sibling"))?;
+            st::slurp_backward(node, prev).ok_or_else(|| na("slurp-back: node is not a list"))?
+        }
+        SVerb::BarfFwd => {
+            st::barf_forward(node).ok_or_else(|| na("barf-fwd: empty or non-list"))?
+        }
+        SVerb::BarfBack => {
+            st::barf_backward(node).ok_or_else(|| na("barf-back: empty or non-list"))?
+        }
+        SVerb::Split => {
+            let index = op.index.ok_or_else(|| na("split: missing index"))?;
+            st::split(node, index).ok_or_else(|| na("split: bad index or non-list"))?
+        }
+        SVerb::Join => {
+            let a2 = op.anchor2.as_ref().ok_or_else(|| na("join: missing second anchor"))?;
+            let second = crate::resolve::resolve(source, data, a2).ok_or_else(|| {
+                ApplyError::AnchorNotFound { line: a2.line, hash: a2.hash.clone() }
+            })?;
+            st::join(node, second.node).ok_or_else(|| na("join: both must be lists"))?
+        }
     })
+}
+
+/// The sibling of the located node at `offset` (+1 next, -1 previous), or
+/// `None` if there is no parent or no such sibling.
+fn sibling<'a, 't>(
+    located: &crate::resolve::Located<'a, 't>,
+    offset: isize,
+) -> Option<&'a Datum<'t>> {
+    let DatumKind::List { items, .. } = &located.parent?.kind else {
+        return None;
+    };
+    let target = located.index?.checked_add_signed(offset)?;
+    items.get(target)
 }
 
 #[cfg(test)]
@@ -518,6 +587,58 @@ mod tests {
         let patch = parse_struct_patch(&format!("@ {fh}\nsplice 1:{h}\n")).unwrap();
         apply_struct_patch(&path, &patch, &Options::scheme()).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "(foo bar baz quux)\n");
+    }
+
+    fn apply_struct(source: &str, op_line: &str, node_text: &str) -> String {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.scm");
+        std::fs::write(&path, source).unwrap();
+        let fh = file_hash(source.as_bytes());
+        let h = node_hash(node_text);
+        let patch = parse_struct_patch(&format!("@ {fh}\n{op_line} 1:{h}\n")).unwrap();
+        apply_struct_patch(&path, &patch, &Options::scheme()).unwrap();
+        std::fs::read_to_string(&path).unwrap()
+    }
+
+    #[test]
+    fn struct_slurp_forward_swallows_the_next_sibling() {
+        assert_eq!(
+            apply_struct("(foo (bar) baz)\n", "slurp-fwd", "(bar)"),
+            "(foo (bar baz))\n"
+        );
+    }
+
+    #[test]
+    fn struct_barf_forward_expels_the_last_element() {
+        assert_eq!(
+            apply_struct("(foo (bar baz))\n", "barf-fwd", "(bar baz)"),
+            "(foo (bar) baz)\n"
+        );
+    }
+
+    #[test]
+    fn struct_split_divides_a_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.scm");
+        std::fs::write(&path, "(a b)\n").unwrap();
+        let fh = file_hash("(a b)\n".as_bytes());
+        let h = node_hash("(a b)");
+        let patch = parse_struct_patch(&format!("@ {fh}\nsplit 1:{h} @0\n")).unwrap();
+        apply_struct_patch(&path, &patch, &Options::scheme()).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "(a) (b)\n");
+    }
+
+    #[test]
+    fn struct_join_merges_two_lists() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.scm");
+        std::fs::write(&path, "(a) (b)\n").unwrap();
+        let fh = file_hash("(a) (b)\n".as_bytes());
+        let h1 = node_hash("(a)");
+        let h2 = node_hash("(b)");
+        let patch = parse_struct_patch(&format!("@ {fh}\njoin 1:{h1} 1:{h2}\n")).unwrap();
+        apply_struct_patch(&path, &patch, &Options::scheme()).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "(a b)\n");
     }
 
     #[test]
