@@ -28,11 +28,3 @@ jobs:
           RUSTDOCFLAGS: -D warnings
       - name: Package (dry run)
         run: cargo publish --dry-run
-
-  msrv:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@1.70
-      - name: Build on MSRV
-        run: cargo build

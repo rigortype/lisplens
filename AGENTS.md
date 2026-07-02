@@ -11,7 +11,7 @@ agents, built on the lispexp reader. Orient with these before changing code:
 - **[docs/lispexp-integration.md](docs/lispexp-integration.md)** / **[docs/lispexp-feedback/](docs/lispexp-feedback/)** — how the lispexp backend is used, and outstanding upstream asks.
 - **[docs/CURRENT_WORKS.md](docs/CURRENT_WORKS.md)** — status snapshot + next steps (ephemeral; durable knowledge is in the dev docs above).
 
-Conventions: Rust edition 2021 / rust-version 1.70; keep `cargo test` and `cargo clippy --all-targets` green. Commit as work lands, with imperative subjects and ADR refs.
+Conventions: Rust edition 2021, current stable (no pinned MSRV — a binary tool whose deps track recent Rust); keep `cargo fmt`, `cargo test`, and `cargo clippy --all-targets` green. Commit as work lands, with imperative subjects and ADR refs.
 
 ## Agent skills
 
