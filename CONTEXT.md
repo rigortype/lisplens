@@ -40,6 +40,10 @@ _Avoid_: config, settings, dotfile
 A set of same-mode edit operations submitted in one call, checked for drift against a single read snapshot and applied all-or-nothing after validation. The unit of token efficiency: one round-trip, one snapshot, one atomic write.
 _Avoid_: transaction, changeset, patch set
 
+**Patch**:
+The terse-text rendering of a Batch for the CLI (`line edit` / `struct edit`): a `@ file-hash` header plus one op per line, with heredoc payloads. The MCP surface carries the same Batch as a JSON op array instead.
+_Avoid_: diff, hunk
+
 **Dispatch signature**:
 The verbatim qualifier and specializer tokens that distinguish one method of a generic function from another — e.g. `cl-defmethod`'s `:around` qualifier and `((x integer))` specializers, or a Clojure multimethod's dispatch value. Used as a stable Structural mode handle that survives reordering. Read as syntax only; the tokens are never resolved to types, respecting the form-annotator-level semantic ceiling.
 _Avoid_: type signature, overload signature
