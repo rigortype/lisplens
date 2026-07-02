@@ -139,7 +139,8 @@ fn run_format(path: PathBuf, nameless: bool) -> ExitCode {
         }
     };
     let config = lisplens::config::resolve(&path, &source);
-    let formatted = if nameless {
+    // `--nameless` forces it on; a `nameless-mode` file-/dir-local resolves it too.
+    let formatted = if nameless || config.nameless {
         let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or_default();
         let nl = lisplens::nameless::Nameless::for_file(file_name);
         lisplens::format::format_elisp_nameless(&source, &config, &nl)

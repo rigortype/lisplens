@@ -15,7 +15,12 @@ Each occurrence at a symbol start contributes a saving of `region_len - display_
 
 ## Enablement
 
-Off by default — enabling it globally would corrupt the non-Nameless corpora (magit, lem, Emacs core). It is an explicit opt-in: `lisplens format --nameless FILE`. Nameless is a property of the author's editor (an `emacs-lisp-mode-hook`), not of the file, so nothing in the file itself can trigger it. Current name is derived from the file name and aliases are the default set; reading `nameless-current-name` / `nameless-aliases` as file-/dir-local variables is desirable but deferred (the real corpora set none).
+Off by default — enabling it globally would corrupt the non-Nameless corpora (magit, lem, Emacs core). Two ways to turn it on:
+
+1. **`lisplens format --nameless FILE`** — an explicit one-off.
+2. **A `nameless-mode` file-/dir-local** resolved into `FormatConfig.nameless` (ADR-0029). Nameless is a property of the author's editor (an `emacs-lisp-mode-hook`), not of the file — but a project that wants lisplens to treat its Elisp as Nameless can say so once in `.dir-locals.el`: `((emacs-lisp-mode (nameless-mode . t)))`.
+
+The config path is what lets the **edit** auto-format (ADR-0025/0028) stay Nameless-aware: `apply_struct_patch` builds the `Nameless` when `config.nameless` and passes it to `reindent`, so editing a Nameless file no longer reflows it to non-Nameless columns. Current name is still derived per file from the file name, and aliases are the default set; reading `nameless-current-name` / `nameless-aliases` as locals is still deferred (the real corpora set none).
 
 ## Status
 

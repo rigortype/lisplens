@@ -86,18 +86,25 @@ pub struct Touched<'a> {
 /// Auto-format reindent: reindent the whole top-level form(s) overlapping any of
 /// `ranges`. Used for the touched region of a Structural edit.
 pub fn reindent_range(source: &str, config: &FormatConfig, ranges: &[Range<usize>]) -> String {
-    reindent(source, config, Touched { expand: ranges, exact: &[] })
+    reindent(source, config, None, Touched { expand: ranges, exact: &[] })
 }
 
 /// Block reindent: reindent exactly the lines of `block` (one form, possibly
 /// nested), in full file context — the explicit `format`-by-anchor path.
 pub fn reindent_block(source: &str, config: &FormatConfig, block: Range<usize>) -> String {
-    reindent(source, config, Touched { expand: &[], exact: std::slice::from_ref(&block) })
+    reindent(source, config, None, Touched { expand: &[], exact: std::slice::from_ref(&block) })
 }
 
-/// The general touched-region reindent (see [`Touched`]).
-pub fn reindent(source: &str, config: &FormatConfig, touched: Touched) -> String {
-    format_elisp_impl(source, config, None, Some(touched))
+/// The general touched-region reindent (see [`Touched`]), optionally measuring
+/// columns under Nameless (ADR-0030) so an edit to a Nameless file keeps its
+/// composed-prefix alignment.
+pub fn reindent(
+    source: &str,
+    config: &FormatConfig,
+    nameless: Option<&Nameless>,
+    touched: Touched,
+) -> String {
+    format_elisp_impl(source, config, nameless, Some(touched))
 }
 
 fn format_elisp_impl(

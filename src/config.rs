@@ -20,11 +20,22 @@ pub struct FormatConfig {
     /// Emacs `comment-column`: the column a lone `;` own-line comment aligns to
     /// (`indent-for-comment`). Default 40.
     pub comment_column: usize,
+    /// Whether the file is indented under [Nameless](https://github.com/Malabarba/Nameless)
+    /// (ADR-0030), so column measurement must account for its prefix composition.
+    /// Enabled by a `nameless-mode` file-/dir-local, or the `--nameless` CLI flag.
+    /// The per-file `Nameless` (current name, aliases) is built by the caller.
+    pub nameless: bool,
 }
 
 impl Default for FormatConfig {
     fn default() -> Self {
-        FormatConfig { indent_tabs: false, tab_width: 8, body_indent: 2, comment_column: 40 }
+        FormatConfig {
+            indent_tabs: false,
+            tab_width: 8,
+            body_indent: 2,
+            comment_column: 40,
+            nameless: false,
+        }
     }
 }
 
@@ -62,6 +73,11 @@ fn set_var(cfg: &mut FormatConfig, var: &str, val: &str) {
                 cfg.comment_column = n;
             }
         }
+        "nameless-mode" => match val.trim() {
+            "t" => cfg.nameless = true,
+            "nil" => cfg.nameless = false,
+            _ => {}
+        },
         _ => {}
     }
 }
@@ -141,12 +157,28 @@ fn apply_dir_locals_content(content: &str, cfg: &mut FormatConfig) {
     let Some(top) = parsed.data.first() else {
         return;
     };
-    for (mode, inner) in alist(top) {
-        if mode_applies(mode) {
-            for (var, val) in alist(inner) {
-                if let (Some(var), Some(val)) = (atom_text(var), atom_text(val)) {
-                    set_var(cfg, var, val);
-                }
+    let DatumKind::List { items: entries, .. } = &top.kind else {
+        return;
+    };
+    for entry in entries {
+        let DatumKind::List { items, tail, .. } = &entry.kind else {
+            continue;
+        };
+        let Some(mode) = items.first() else {
+            continue;
+        };
+        if !mode_applies(mode) {
+            continue;
+        }
+        // Emacs accepts both `(MODE . ((VAR . VAL) …))` (dotted — the vars are the
+        // tail list) and `(MODE (VAR . VAL) …)` (the vars are the items after MODE).
+        let var_pairs: Vec<_> = match tail {
+            Some(t) => alist(t),
+            None => items[1..].iter().filter_map(pair).collect(),
+        };
+        for (var, val) in var_pairs {
+            if let (Some(var), Some(val)) = (atom_text(var), atom_text(val)) {
+                set_var(cfg, var, val);
             }
         }
     }
@@ -422,6 +454,27 @@ mod tests {
         let mut c = FormatConfig::default();
         apply_dir_locals_content("((nil . ((indent-tabs-mode . t))))", &mut c);
         assert!(c.indent_tabs);
+    }
+
+    #[test]
+    fn dir_locals_accept_both_mode_entry_forms() {
+        // Non-dotted `(MODE (VAR . VAL) …)` — the form php-mode's own file uses.
+        let mut c = FormatConfig::default();
+        apply_dir_locals_content("((emacs-lisp-mode (tab-width . 5) (nameless-mode . t)))", &mut c);
+        assert_eq!(c.tab_width, 5);
+        assert!(c.nameless);
+
+        // Dotted `(MODE . ((VAR . VAL) …))` still works.
+        let mut c2 = FormatConfig::default();
+        apply_dir_locals_content("((emacs-lisp-mode . ((nameless-mode . t))))", &mut c2);
+        assert!(c2.nameless);
+    }
+
+    #[test]
+    fn nameless_mode_resolves_from_file_local() {
+        let mut c = FormatConfig::default();
+        apply_file_locals(";;; x -*- nameless-mode: t -*-\n(foo)\n", &mut c);
+        assert!(c.nameless);
     }
 
     #[test]

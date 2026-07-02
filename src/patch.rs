@@ -440,7 +440,18 @@ pub fn apply_struct_patch(
             .map(|(_, r)| r.clone())
             .collect();
         let exact: Vec<_> = format_edits.iter().map(|&i| spans[i].clone()).collect();
-        crate::format::reindent(&spliced, &config, crate::format::Touched { expand: &expand, exact: &exact })
+        // Keep Nameless-indented files (e.g. php-mode/lisp) from being reflowed
+        // to non-Nameless columns when a config signal marks them (ADR-0030).
+        let nl = config.nameless.then(|| {
+            let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or_default();
+            crate::nameless::Nameless::for_file(file_name)
+        });
+        crate::format::reindent(
+            &spliced,
+            &config,
+            nl.as_ref(),
+            crate::format::Touched { expand: &expand, exact: &exact },
+        )
     } else {
         spliced
     };
@@ -543,6 +554,29 @@ mod tests {
         let patch = parse_line_patch("@ abc123\ndelete 3:9999\n").unwrap();
         assert_eq!(patch.file_hash, "abc123");
         assert_eq!(patch.ops.len(), 1);
+    }
+
+    #[test]
+    fn struct_edit_auto_format_honors_nameless_config() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".dir-locals.el"),
+            "((emacs-lisp-mode (nameless-mode . t)))\n",
+        )
+        .unwrap();
+        let path = dir.path().join("php-mode.el"); // current-name → "php"
+        let source = "(defun php-mode-x ()\n(php-mode-some-function arg1\nanother-arg))\n";
+        std::fs::write(&path, source).unwrap();
+        let fh = file_hash(source.as_bytes());
+        let h = anchor_hash("(defun php-mode-x ()\n(php-mode-some-function arg1\nanother-arg))".as_bytes());
+        let patch = parse_struct_patch(&format!("@ {fh}\nformat 1:{h}\n")).unwrap();
+        apply_struct_patch(&path, &patch, Dialect::EmacsLisp).unwrap();
+        // `php-` composes to `:`, so `another-arg` aligns at column 23, not 26.
+        let expected = format!(
+            "(defun php-mode-x ()\n  (php-mode-some-function arg1\n{}another-arg))\n",
+            " ".repeat(23)
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), expected);
     }
 
     #[test]

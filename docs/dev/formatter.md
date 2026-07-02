@@ -177,11 +177,12 @@ full context (`reindent_block`). The `format` op is carried as an *identity edit
 (replace the node with its own bytes) so `splice_tracked` hands back its
 post-splice span for free and any conflict with another op is caught by splice.
 
-**Limitation — auto-format is not Nameless-aware.** The edit path calls
-`reindent` with no Nameless context (Nameless is a `format --nameless` CLI
-opt-in, not part of the resolved `FormatConfig`). Structural-editing a
-Nameless-indented file (e.g. `php-mode/lisp`) would reindent its touched form to
-*non*-Nameless columns — corruption. Until Nameless becomes a resolvable config
-that flows into the edit path, edit such files with Line-hash patches (literal,
-ADR-0027). Surfaced dogfooding php-mode — see
-`docs/notes/20260703-dogfooding-php-mode.md`.
+**Auto-format is Nameless-aware when configured.** `reindent` takes an
+`Option<&Nameless>`; `apply_struct_patch` builds one (per-file, from the file
+name) when `config.nameless` resolves true — a `nameless-mode` file-/dir-local
+(ADR-0029/0030) — and passes it through, so Structural-editing a
+Nameless-indented file (e.g. `php-mode/lisp` with
+`((emacs-lisp-mode (nameless-mode . t)))`) keeps its composed-prefix alignment
+instead of reflowing to non-Nameless columns. Without that signal the edit path
+is plain (correct for the non-Nameless corpora). Surfaced dogfooding php-mode —
+see `docs/notes/20260703-dogfooding-php-mode.md`.

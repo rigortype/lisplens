@@ -37,11 +37,16 @@ non-Nameless columns — corruption. Root cause: Nameless is a CLI opt-in
 (`format --nameless`), not part of the resolved `FormatConfig`, so the edit path
 cannot know to apply it.
 
-**Direction:** make Nameless a *resolvable* setting (a dir-local / project signal
-in `config::resolve`) so both the `format` command and the edit auto-format honor
-it; or add an auto-format opt-out. Until then, edit Nameless files with Line-hash
-patches. (Confirmed the hazard live: a stray `format --nameless` on php-mode.el
-reindented its whole file — see Finding 2 — and had to be reverted.)
+**Fixed (follow-up):** Nameless is now a resolvable setting. `FormatConfig` gains
+a `nameless: bool`, set by a `nameless-mode` file-/dir-local
+(`((emacs-lisp-mode (nameless-mode . t)))`); `reindent` takes an
+`Option<&Nameless>` and `apply_struct_patch` builds one per file when the config
+says so, so both the `format` command and the edit auto-format stay Nameless-aware.
+Verified: a `format`-op struct edit on a flat php-mode form now lands at Nameless
+columns (`another-arg` at 23, not the non-Nameless 26). Fixing the signal also
+exposed and fixed a dir-locals parser bug — it only read the dotted
+`(MODE . (…))` form, not the `(MODE (VAR . VAL) …)` form php-mode's own
+`.dir-locals.el` uses.
 
 ## Finding 2 (fixable) — external-package indent macros are unknown
 

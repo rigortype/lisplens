@@ -11,7 +11,9 @@ Resolution applies sources low-to-high so higher overrides: defaults → EditorC
 
 ## Scope
 
-Variables consumed: `indent-tabs-mode`, `tab-width`, `lisp-body-indent` (the structural indent unit, default 2), and `comment-column` (lone-`;` comment alignment, default 40). EditorConfig maps `indent_style` → `indent-tabs-mode`, `tab_width` → `tab-width`, and `indent_size` → `lisp-body-indent`; `comment-column` has no EditorConfig equivalent. The same precedence applies to all.
+Variables consumed: `indent-tabs-mode`, `tab-width`, `lisp-body-indent` (the structural indent unit, default 2), `comment-column` (lone-`;` comment alignment, default 40), and `nameless-mode` (a boolean that turns on Nameless-aware indentation, ADR-0030). EditorConfig maps `indent_style` → `indent-tabs-mode`, `tab_width` → `tab-width`, and `indent_size` → `lisp-body-indent`; `comment-column` and `nameless-mode` have no EditorConfig equivalent. The same precedence applies to all.
+
+dir-locals mode entries are read in both Emacs forms: dotted `(MODE . ((VAR . VAL) …))` and the equally-valid `(MODE (VAR . VAL) …)` (which php-mode's own `.dir-locals.el` uses).
 
 ## Status
 

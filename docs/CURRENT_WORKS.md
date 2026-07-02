@@ -6,7 +6,7 @@ in the dev docs** (see `AGENTS.md` → Codebase): `docs/dev/architecture.md`,
 
 ## Now
 
-- 94 tests pass, `cargo clippy --all-targets` clean; tree clean. 30 ADRs.
+- 97 tests pass, `cargo clippy --all-targets` clean; tree clean. 30 ADRs.
 - **Touched-region auto-format on Structural edit (ADR-0025/0028) is wired**:
   `apply_struct_patch` reindents the top-level forms an edit fell within
   (`format::reindent_range` + `edit::splice_tracked`), Emacs Lisp only, others
@@ -40,10 +40,12 @@ in the dev docs** (see `AGENTS.md` → Codebase): `docs/dev/architecture.md`,
 - **Nameless-aware indentation (ADR-0030)**: `format --nameless` models
   Nameless's namespace-prefix composition (`php-`→`:`, `font-lock-`→`fl:`).
 - **Dogfooded on php-mode** (fixed its Emacs-32 build via lisplens patches;
-  `docs/notes/20260703-dogfooding-php-mode.md`). Surfaced two findings: the
-  bundle now includes `cc-mode` specs (`c-lang-defconst` etc., 342 entries) —
-  **fixed**; and Structural-edit auto-format is not Nameless-aware — **standing
-  limitation** (edit Nameless files with Line-hash patches for now).
+  `docs/notes/20260703-dogfooding-php-mode.md`). Both findings now **fixed**:
+  the bundle includes `cc-mode` specs (`c-lang-defconst` etc., 342 entries); and
+  Structural-edit auto-format is **Nameless-aware when configured** — a
+  `nameless-mode` file-/dir-local resolves `FormatConfig.nameless` and flows into
+  the edit path (ADR-0029/0030). Also fixed a dir-locals parser bug (only read
+  the dotted mode-entry form, not php-mode's `(MODE (VAR . VAL) …)` form).
 
 ## Deferred (future work — not blocking first release)
 
