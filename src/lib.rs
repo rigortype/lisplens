@@ -8,6 +8,7 @@
 pub mod edit;
 pub mod hash;
 pub mod linehash;
+pub mod structural;
 pub mod write;
 
 use std::path::Path;
