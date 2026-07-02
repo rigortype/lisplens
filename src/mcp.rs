@@ -31,7 +31,11 @@ pub fn serve() -> std::io::Result<()> {
         let Some(id) = msg.get("id").cloned() else {
             continue;
         };
-        let response = handle(msg.get("method").and_then(Value::as_str).unwrap_or(""), &msg, id);
+        let response = handle(
+            msg.get("method").and_then(Value::as_str).unwrap_or(""),
+            &msg,
+            id,
+        );
         writeln!(stdout, "{response}")?;
         stdout.flush()?;
     }
@@ -67,20 +71,48 @@ fn tools() -> Value {
     let name = json!({ "type": "string" });
     let dir = json!({ "type": "string", "description": "directory to search (default: .)" });
     json!([
-        tool("struct_read", "Structural Outline; with `name`, expand that definition",
-            json!({ "file": file, "name": name }), &["file"]),
-        tool("line_read", "Line-hash view ([path#hash] + N:hash|content)",
-            json!({ "file": file }), &["file"]),
-        tool("struct_edit", "Apply a Structural patch",
-            json!({ "file": file, "patch": patch }), &["file", "patch"]),
-        tool("line_edit", "Apply a Line-hash patch",
-            json!({ "file": file, "patch": patch }), &["file", "patch"]),
-        tool("find", "Find definitions by name across a project",
-            json!({ "name": name, "dir": dir }), &["name"]),
-        tool("refs", "Find symbol occurrences (code/data tagged)",
-            json!({ "name": name, "dir": dir }), &["name"]),
-        tool("format", "Reindent an Emacs Lisp file in place",
-            json!({ "file": file }), &["file"]),
+        tool(
+            "struct_read",
+            "Structural Outline; with `name`, expand that definition",
+            json!({ "file": file, "name": name }),
+            &["file"]
+        ),
+        tool(
+            "line_read",
+            "Line-hash view ([path#hash] + N:hash|content)",
+            json!({ "file": file }),
+            &["file"]
+        ),
+        tool(
+            "struct_edit",
+            "Apply a Structural patch",
+            json!({ "file": file, "patch": patch }),
+            &["file", "patch"]
+        ),
+        tool(
+            "line_edit",
+            "Apply a Line-hash patch",
+            json!({ "file": file, "patch": patch }),
+            &["file", "patch"]
+        ),
+        tool(
+            "find",
+            "Find definitions by name across a project",
+            json!({ "name": name, "dir": dir }),
+            &["name"]
+        ),
+        tool(
+            "refs",
+            "Find symbol occurrences (code/data tagged)",
+            json!({ "name": name, "dir": dir }),
+            &["name"]
+        ),
+        tool(
+            "format",
+            "Reindent an Emacs Lisp file in place",
+            json!({ "file": file }),
+            &["file"]
+        ),
     ])
 }
 
@@ -126,14 +158,16 @@ fn run_tool(name: &str, args: &Value) -> Result<String, String> {
             let file = arg(args, "file")?;
             let text = arg(args, "patch")?;
             let patch = parse_line_patch(text).map_err(|e| format!("patch parse error: {e:?}"))?;
-            let outcome = apply_line_patch(Path::new(file), &patch, dialect_for_path(Path::new(file)))
-                .map_err(|e| format!("{e:?}"))?;
+            let outcome =
+                apply_line_patch(Path::new(file), &patch, dialect_for_path(Path::new(file)))
+                    .map_err(|e| format!("{e:?}"))?;
             Ok(edit_text(&outcome))
         }
         "struct_edit" => {
             let file = arg(args, "file")?;
             let text = arg(args, "patch")?;
-            let patch = parse_struct_patch(text).map_err(|e| format!("patch parse error: {e:?}"))?;
+            let patch =
+                parse_struct_patch(text).map_err(|e| format!("patch parse error: {e:?}"))?;
             let outcome =
                 apply_struct_patch(Path::new(file), &patch, dialect_for_path(Path::new(file)))
                     .map_err(|e| format!("{e:?}"))?;
@@ -197,7 +231,10 @@ fn error(id: Value, code: i64, message: &str) -> Value {
 }
 
 fn tool_result(id: Value, text: String, is_error: bool) -> Value {
-    ok(id, json!({ "content": [{ "type": "text", "text": text }], "isError": is_error }))
+    ok(
+        id,
+        json!({ "content": [{ "type": "text", "text": text }], "isError": is_error }),
+    )
 }
 
 #[cfg(test)]

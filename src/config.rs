@@ -120,7 +120,9 @@ fn apply_footer(source: &str, cfg: &mut FormatConfig) {
     let line_start = source[..marker].rfind('\n').map_or(0, |i| i + 1);
     let prefix = &source[line_start..marker];
     for line in source[marker..].lines().skip(1) {
-        let body = line.strip_prefix(prefix).unwrap_or_else(|| line.trim_start());
+        let body = line
+            .strip_prefix(prefix)
+            .unwrap_or_else(|| line.trim_start());
         let body = body.trim();
         if body.starts_with("End:") {
             break;
@@ -232,7 +234,11 @@ fn apply_editorconfig(path: &Path, cfg: &mut FormatConfig) {
         let Ok(content) = std::fs::read_to_string(dir.join(".editorconfig")) else {
             continue;
         };
-        let rel = abs.strip_prefix(dir).ok().and_then(|p| p.to_str()).unwrap_or_default();
+        let rel = abs
+            .strip_prefix(dir)
+            .ok()
+            .and_then(|p| p.to_str())
+            .unwrap_or_default();
         let (props, is_root) = editorconfig_props(&content, rel);
         if !set_style {
             if let Some(v) = props.indent_tabs {
@@ -285,7 +291,10 @@ fn editorconfig_props(content: &str, rel: &str) -> (EcProps, bool) {
         let Some((key, val)) = line.split_once('=') else {
             continue;
         };
-        let (key, val) = (key.trim().to_ascii_lowercase(), val.trim().to_ascii_lowercase());
+        let (key, val) = (
+            key.trim().to_ascii_lowercase(),
+            val.trim().to_ascii_lowercase(),
+        );
         if key == "root" && val == "true" {
             is_root = true;
         }
@@ -422,19 +431,28 @@ mod tests {
     #[test]
     fn header_and_footer_set_indent_tabs() {
         let mut c = FormatConfig::default();
-        apply_file_locals(";;; x -*- indent-tabs-mode: t; tab-width: 4 -*-\n(foo)\n", &mut c);
+        apply_file_locals(
+            ";;; x -*- indent-tabs-mode: t; tab-width: 4 -*-\n(foo)\n",
+            &mut c,
+        );
         assert!(c.indent_tabs);
         assert_eq!(c.tab_width, 4);
 
         let mut c2 = FormatConfig::default();
-        apply_file_locals("(foo)\n;; Local Variables:\n;; indent-tabs-mode: t\n;; End:\n", &mut c2);
+        apply_file_locals(
+            "(foo)\n;; Local Variables:\n;; indent-tabs-mode: t\n;; End:\n",
+            &mut c2,
+        );
         assert!(c2.indent_tabs);
     }
 
     #[test]
     fn file_local_overrides_and_shebang_is_skipped() {
         let mut c = FormatConfig::default();
-        apply_file_locals("#!/usr/bin/emacs --script\n;; -*- tab-width: 2 -*-\n", &mut c);
+        apply_file_locals(
+            "#!/usr/bin/emacs --script\n;; -*- tab-width: 2 -*-\n",
+            &mut c,
+        );
         assert_eq!(c.tab_width, 2);
     }
 
@@ -460,7 +478,10 @@ mod tests {
     fn dir_locals_accept_both_mode_entry_forms() {
         // Non-dotted `(MODE (VAR . VAL) …)` — the form php-mode's own file uses.
         let mut c = FormatConfig::default();
-        apply_dir_locals_content("((emacs-lisp-mode (tab-width . 5) (nameless-mode . t)))", &mut c);
+        apply_dir_locals_content(
+            "((emacs-lisp-mode (tab-width . 5) (nameless-mode . t)))",
+            &mut c,
+        );
         assert_eq!(c.tab_width, 5);
         assert!(c.nameless);
 

@@ -28,7 +28,10 @@ pub fn read(path_display: &str, source: &str) -> String {
     let mut out = format!("[{path_display}#{}]\n", file_hash(source.as_bytes()));
     for n in 1..=index.line_count() as u32 {
         let content = &source[index.line_range(n).expect("n is within line_count")];
-        out.push_str(&format!("{n}:{}|{content}\n", anchor_hash(content.as_bytes())));
+        out.push_str(&format!(
+            "{n}:{}|{content}\n",
+            anchor_hash(content.as_bytes())
+        ));
     }
     out
 }

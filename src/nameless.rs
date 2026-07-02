@@ -42,7 +42,10 @@ impl Nameless {
         }
         for (alias, ns) in DEFAULT_ALIASES {
             // `NS-rest` displays as `ALIAS:rest` — glyph string is `alias` + `:`.
-            prefixes.push((format!("{ns}{SEP}"), display_cols(alias.len() + NAMELESS_PREFIX.len())));
+            prefixes.push((
+                format!("{ns}{SEP}"),
+                display_cols(alias.len() + NAMELESS_PREFIX.len()),
+            ));
         }
         Nameless { prefixes }
     }
@@ -90,11 +93,17 @@ mod tests {
     #[test]
     fn current_name_matches_nameless_discovery() {
         assert_eq!(current_name("php-mode.el").as_deref(), Some("php"));
-        assert_eq!(current_name("php-project.el").as_deref(), Some("php-project"));
+        assert_eq!(
+            current_name("php-project.el").as_deref(),
+            Some("php-project")
+        );
         assert_eq!(current_name("php.el").as_deref(), Some("php"));
         assert_eq!(current_name("foo-mode-tests.el").as_deref(), Some("foo"));
         assert_eq!(current_name("bar-test.el").as_deref(), Some("bar"));
-        assert_eq!(current_name("/a/b/php-face.el").as_deref(), Some("php-face"));
+        assert_eq!(
+            current_name("/a/b/php-face.el").as_deref(),
+            Some("php-face")
+        );
     }
 
     #[test]

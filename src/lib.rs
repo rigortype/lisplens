@@ -178,7 +178,10 @@ pub fn expand_text(source: &str, dialect: Dialect, name: &str) -> String {
     let mut out = String::new();
     for node in expand(source, dialect, name) {
         let indent = "  ".repeat(node.depth as usize);
-        out.push_str(&format!("{:>5}  {}  {indent}{}\n", node.line, node.hash, node.preview));
+        out.push_str(&format!(
+            "{:>5}  {}  {indent}{}\n",
+            node.line, node.hash, node.preview
+        ));
     }
     out
 }
@@ -291,7 +294,11 @@ mod tests {
         let src = "(define (square x) (* x x))\n(define pi 3.14)\n(+ 1 2)\n";
         let entries = outline(src, Dialect::Scheme);
 
-        assert_eq!(entries.len(), 2, "the bare call (+ 1 2) is not a definition");
+        assert_eq!(
+            entries.len(),
+            2,
+            "the bare call (+ 1 2) is not a definition"
+        );
         assert_eq!(entries[0].kind, "define");
         assert_eq!(entries[0].name.as_deref(), Some("square"));
         assert_eq!(entries[0].line, 1);
@@ -320,8 +327,16 @@ mod tests {
         let entries = outline(src, Dialect::EmacsLisp);
 
         assert_eq!(entries.len(), 2);
-        assert!(entries[0].signature.as_deref().unwrap().contains("square"), "{:?}", entries[0]);
-        assert!(entries[1].signature.as_deref().unwrap().contains("circle"), "{:?}", entries[1]);
+        assert!(
+            entries[0].signature.as_deref().unwrap().contains("square"),
+            "{:?}",
+            entries[0]
+        );
+        assert!(
+            entries[1].signature.as_deref().unwrap().contains("circle"),
+            "{:?}",
+            entries[1]
+        );
 
         let plain = outline("(defun f () 1)\n", Dialect::EmacsLisp);
         assert_eq!(plain[0].signature, None);

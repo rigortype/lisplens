@@ -8,7 +8,12 @@ use std::process::ExitCode;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
+    match args
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .as_slice()
+    {
         ["struct", "read", file] => run_struct_read(PathBuf::from(file)),
         ["struct", "read", file, name] => run_struct_expand(PathBuf::from(file), name),
         ["line", "read", file] => run_line_read(PathBuf::from(file)),
@@ -52,7 +57,10 @@ fn run_line_read(path: PathBuf) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    print!("{}", lisplens::linehash::read(&path.display().to_string(), &source));
+    print!(
+        "{}",
+        lisplens::linehash::read(&path.display().to_string(), &source)
+    );
     ExitCode::SUCCESS
 }
 
@@ -141,7 +149,10 @@ fn run_format(path: PathBuf, nameless: bool) -> ExitCode {
     let config = lisplens::config::resolve(&path, &source);
     // `--nameless` forces it on; a `nameless-mode` file-/dir-local resolves it too.
     let formatted = if nameless || config.nameless {
-        let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or_default();
+        let file_name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default();
         let nl = lisplens::nameless::Nameless::for_file(file_name);
         lisplens::format::format_elisp_nameless(&source, &config, &nl)
     } else {

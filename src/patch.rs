@@ -82,7 +82,11 @@ pub enum ApplyError {
     /// An op referenced a line outside the file.
     LineOutOfRange(u32),
     /// An op's hash did not match the current line content.
-    AnchorMismatch { line: u32, expected: String, actual: String },
+    AnchorMismatch {
+        line: u32,
+        expected: String,
+        actual: String,
+    },
     /// No node matched a Structural anchor.
     AnchorNotFound { line: u32, hash: String },
     /// An op cannot apply to the resolved node (e.g. raise of a top-level node,
@@ -124,10 +128,17 @@ fn parse_anchor(token: &str) -> Result<Anchor, PatchError> {
         .ok_or_else(|| PatchError::BadAnchor(token.to_string()))?
         .to_string();
     let ordinal = match parts.next() {
-        Some(s) => Some(s.parse::<u32>().map_err(|_| PatchError::BadAnchor(token.to_string()))?),
+        Some(s) => Some(
+            s.parse::<u32>()
+                .map_err(|_| PatchError::BadAnchor(token.to_string()))?,
+        ),
         None => None,
     };
-    Ok(Anchor { line, hash, ordinal })
+    Ok(Anchor {
+        line,
+        hash,
+        ordinal,
+    })
 }
 
 /// Parse a Line-hash Patch (ADR-0021).
@@ -167,7 +178,11 @@ pub fn parse_line_patch(input: &str) -> Result<LinePatch, PatchError> {
             Some("insert-before") => Verb::InsertBefore,
             _ => return Err(PatchError::BadOp(line.to_string())),
         };
-        let anchor = parse_anchor(tokens.next().ok_or_else(|| PatchError::BadOp(line.to_string()))?)?;
+        let anchor = parse_anchor(
+            tokens
+                .next()
+                .ok_or_else(|| PatchError::BadOp(line.to_string()))?,
+        )?;
 
         let needs_text = matches!(verb, Verb::Replace | Verb::InsertAfter | Verb::InsertBefore);
         let text = if needs_text {
@@ -262,7 +277,10 @@ fn build_edit(
             text: op.text.clone().unwrap_or_default(),
         },
         // Delete the whole line, terminator included.
-        Verb::Delete => Edit { range: full, text: String::new() },
+        Verb::Delete => Edit {
+            range: full,
+            text: String::new(),
+        },
         // Insert a new line; lisplens supplies the terminator (ADR-0011).
         Verb::InsertAfter => Edit {
             range: full.end..full.end,
@@ -385,7 +403,14 @@ pub fn parse_struct_patch(input: &str) -> Result<StructPatch, PatchError> {
             }
             _ => {}
         }
-        ops.push(SOpSpec { verb, anchor, text, index, anchor2, rename });
+        ops.push(SOpSpec {
+            verb,
+            anchor,
+            text,
+            index,
+            anchor2,
+            rename,
+        });
     }
     Ok(StructPatch { file_hash, ops })
 }
@@ -412,12 +437,13 @@ pub fn apply_struct_patch(
     // exactly the anchored form, not the whole enclosing top-level form.
     let mut format_edits: Vec<usize> = Vec::new();
     for op in &patch.ops {
-        let located = crate::resolve::resolve(&source, &parsed.data, &op.anchor).ok_or_else(|| {
-            ApplyError::AnchorNotFound {
-                line: op.anchor.line,
-                hash: op.anchor.hash.clone(),
-            }
-        })?;
+        let located =
+            crate::resolve::resolve(&source, &parsed.data, &op.anchor).ok_or_else(|| {
+                ApplyError::AnchorNotFound {
+                    line: op.anchor.line,
+                    hash: op.anchor.hash.clone(),
+                }
+            })?;
         let op_edits = build_struct_edits(&source, &parsed.data, op, &located)?;
         if matches!(op.verb, SVerb::Format) {
             format_edits.extend(edits.len()..edits.len() + op_edits.len());
@@ -443,14 +469,20 @@ pub fn apply_struct_patch(
         // Keep Nameless-indented files (e.g. php-mode/lisp) from being reflowed
         // to non-Nameless columns when a config signal marks them (ADR-0030).
         let nl = config.nameless.then(|| {
-            let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or_default();
+            let file_name = path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default();
             crate::nameless::Nameless::for_file(file_name)
         });
         crate::format::reindent(
             &spliced,
             &config,
             nl.as_ref(),
-            crate::format::Touched { expand: &expand, exact: &exact },
+            crate::format::Touched {
+                expand: &expand,
+                exact: &exact,
+            },
         )
     } else {
         spliced
@@ -477,13 +509,20 @@ fn build_struct_edits(
             range: span,
             text: op.text.clone().unwrap_or_default(),
         }],
-        SVerb::Delete => vec![Edit { range: span, text: String::new() }],
+        SVerb::Delete => vec![Edit {
+            range: span,
+            text: String::new(),
+        }],
         SVerb::Wrap => st::wrap(node, op.text.as_deref().unwrap_or_default()),
         SVerb::Raise => {
-            let parent = located.parent.ok_or_else(|| na("raise: node has no parent"))?;
+            let parent = located
+                .parent
+                .ok_or_else(|| na("raise: node has no parent"))?;
             st::raise(source, parent, node)
         }
-        SVerb::Splice => st::splice(source, node).ok_or_else(|| na("splice: node is not a list"))?,
+        SVerb::Splice => {
+            st::splice(source, node).ok_or_else(|| na("splice: node is not a list"))?
+        }
         SVerb::SlurpFwd => {
             let next = sibling(located, 1).ok_or_else(|| na("slurp-fwd: no next sibling"))?;
             st::slurp_forward(node, next).ok_or_else(|| na("slurp-fwd: node is not a list"))?
@@ -503,20 +542,32 @@ fn build_struct_edits(
             st::split(node, index).ok_or_else(|| na("split: bad index or non-list"))?
         }
         SVerb::Join => {
-            let a2 = op.anchor2.as_ref().ok_or_else(|| na("join: missing second anchor"))?;
+            let a2 = op
+                .anchor2
+                .as_ref()
+                .ok_or_else(|| na("join: missing second anchor"))?;
             let second = crate::resolve::resolve(source, data, a2).ok_or_else(|| {
-                ApplyError::AnchorNotFound { line: a2.line, hash: a2.hash.clone() }
+                ApplyError::AnchorNotFound {
+                    line: a2.line,
+                    hash: a2.hash.clone(),
+                }
             })?;
             st::join(node, second.node).ok_or_else(|| na("join: both must be lists"))?
         }
         SVerb::Rename => {
-            let (from, to) = op.rename.as_ref().ok_or_else(|| na("rename: missing from/to"))?;
+            let (from, to) = op
+                .rename
+                .as_ref()
+                .ok_or_else(|| na("rename: missing from/to"))?;
             st::rename(node, from, to)
         }
         // An identity edit: it changes nothing, but records the node's span so
         // the post-splice reindent can format exactly this form (ADR-0028 point
         // 3). The actual reindent runs in `apply_struct_patch`.
-        SVerb::Format => vec![Edit { range: span.clone(), text: source[span].to_string() }],
+        SVerb::Format => vec![Edit {
+            range: span.clone(),
+            text: source[span].to_string(),
+        }],
     })
 }
 
@@ -568,7 +619,9 @@ mod tests {
         let source = "(defun php-mode-x ()\n(php-mode-some-function arg1\nanother-arg))\n";
         std::fs::write(&path, source).unwrap();
         let fh = file_hash(source.as_bytes());
-        let h = anchor_hash("(defun php-mode-x ()\n(php-mode-some-function arg1\nanother-arg))".as_bytes());
+        let h = anchor_hash(
+            "(defun php-mode-x ()\n(php-mode-some-function arg1\nanother-arg))".as_bytes(),
+        );
         let patch = parse_struct_patch(&format!("@ {fh}\nformat 1:{h}\n")).unwrap();
         apply_struct_patch(&path, &patch, Dialect::EmacsLisp).unwrap();
         // `php-` composes to `:`, so `another-arg` aligns at column 23, not 26.
@@ -623,7 +676,10 @@ mod tests {
 
     #[test]
     fn missing_header_is_an_error() {
-        assert_eq!(parse_line_patch("delete 1:aaaa\n"), Err(PatchError::MissingHeader));
+        assert_eq!(
+            parse_line_patch("delete 1:aaaa\n"),
+            Err(PatchError::MissingHeader)
+        );
     }
 
     #[test]
@@ -696,11 +752,15 @@ mod tests {
     fn struct_replace_swaps_a_definition_node() {
         let (_d, path, fh) = temp("(define x 1)\n(define y 2)\n");
         let h = node_hash("(define y 2)");
-        let patch =
-            parse_struct_patch(&format!("@ {fh}\nreplace 2:{h} <<END\n(define y 22)\nEND\n"))
-                .unwrap();
+        let patch = parse_struct_patch(&format!(
+            "@ {fh}\nreplace 2:{h} <<END\n(define y 22)\nEND\n"
+        ))
+        .unwrap();
         apply_struct_patch(&path, &patch, Dialect::Scheme).unwrap();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "(define x 1)\n(define y 22)\n");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "(define x 1)\n(define y 22)\n"
+        );
     }
 
     #[test]
@@ -710,7 +770,10 @@ mod tests {
         let patch =
             parse_struct_patch(&format!("@ {fh}\nwrap 1:{h} <<END\nwhen cond\nEND\n")).unwrap();
         apply_struct_patch(&path, &patch, Dialect::Scheme).unwrap();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "(when cond body)\n");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "(when cond body)\n"
+        );
     }
 
     #[test]
@@ -728,7 +791,10 @@ mod tests {
         let h = node_hash("(bar baz)");
         let patch = parse_struct_patch(&format!("@ {fh}\nsplice 1:{h}\n")).unwrap();
         apply_struct_patch(&path, &patch, Dialect::Scheme).unwrap();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "(foo bar baz quux)\n");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "(foo bar baz quux)\n"
+        );
     }
 
     fn apply_struct(source: &str, op_line: &str, node_text: &str) -> String {
@@ -793,7 +859,10 @@ mod tests {
         let h = node_hash("(define (f x) (+ x x))");
         let patch = parse_struct_patch(&format!("@ {fh}\nrename 1:{h} x y\n")).unwrap();
         apply_struct_patch(&path, &patch, Dialect::Scheme).unwrap();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "(define (f y) (+ y y))\n");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "(define (f y) (+ y y))\n"
+        );
     }
 
     #[test]

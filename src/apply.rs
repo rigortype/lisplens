@@ -109,7 +109,10 @@ mod tests {
     #[test]
     fn byte_edits_apply_end_to_end() {
         let (_dir, path, hash) = temp_file("(f x)\n");
-        let edits = vec![Edit { range: 3..4, text: "y".into() }]; // x -> y
+        let edits = vec![Edit {
+            range: 3..4,
+            text: "y".into(),
+        }]; // x -> y
         apply_edits_to_file(&path, &hash, edits, &Options::scheme()).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "(f y)\n");
     }
@@ -133,9 +136,15 @@ mod tests {
     fn an_edit_that_breaks_syntax_is_refused_by_the_writer() {
         let (_dir, path, hash) = temp_file("(f x)\n");
         // Delete the closing paren -> unbalanced -> verify_and_write refuses.
-        let edits = vec![Edit { range: 4..5, text: "".into() }];
+        let edits = vec![Edit {
+            range: 4..5,
+            text: "".into(),
+        }];
         let err = apply_edits_to_file(&path, &hash, edits, &Options::scheme()).unwrap_err();
-        assert!(matches!(err, ApplyError::Write(WriteError::NewParseErrors { .. })));
+        assert!(matches!(
+            err,
+            ApplyError::Write(WriteError::NewParseErrors { .. })
+        ));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "(f x)\n"); // untouched
     }
 }

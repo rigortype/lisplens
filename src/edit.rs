@@ -182,9 +182,18 @@ mod tests {
     #[test]
     fn splice_replaces_inserts_and_deletes() {
         let edits = vec![
-            Edit { range: 0..1, text: "P".into() }, // replace 'a'
-            Edit { range: 3..3, text: "Z".into() }, // insert before 'd'
-            Edit { range: 4..5, text: "".into() },  // delete 'e'
+            Edit {
+                range: 0..1,
+                text: "P".into(),
+            }, // replace 'a'
+            Edit {
+                range: 3..3,
+                text: "Z".into(),
+            }, // insert before 'd'
+            Edit {
+                range: 4..5,
+                text: "".into(),
+            }, // delete 'e'
         ];
         assert_eq!(splice("abcdef", edits).unwrap(), "PbcZdf");
     }
@@ -192,15 +201,24 @@ mod tests {
     #[test]
     fn splice_rejects_overlap() {
         let edits = vec![
-            Edit { range: 0..3, text: "X".into() },
-            Edit { range: 2..4, text: "Y".into() },
+            Edit {
+                range: 0..3,
+                text: "X".into(),
+            },
+            Edit {
+                range: 2..4,
+                text: "Y".into(),
+            },
         ];
         assert_eq!(splice("abcdef", edits), Err(SpliceError::Overlap));
     }
 
     #[test]
     fn splice_rejects_out_of_bounds() {
-        let edits = vec![Edit { range: 0..99, text: "X".into() }];
+        let edits = vec![Edit {
+            range: 0..99,
+            text: "X".into(),
+        }];
         assert_eq!(splice("abc", edits), Err(SpliceError::OutOfBounds));
     }
 
@@ -208,7 +226,11 @@ mod tests {
     fn replace_a_line_keeps_the_others() {
         let out = apply_line_ops(
             "l1\nl2\nl3\n",
-            &[LineOp::Replace { start: 2, end: 2, text: "L2\n".into() }],
+            &[LineOp::Replace {
+                start: 2,
+                end: 2,
+                text: "L2\n".into(),
+            }],
         )
         .unwrap();
         assert_eq!(out, "l1\nL2\nl3\n");
@@ -225,8 +247,14 @@ mod tests {
         let out = apply_line_ops(
             "l1\nl2\n",
             &[
-                LineOp::InsertAfter { after: 1, text: "mid\n".into() },
-                LineOp::InsertAfter { after: 0, text: "top\n".into() },
+                LineOp::InsertAfter {
+                    after: 1,
+                    text: "mid\n".into(),
+                },
+                LineOp::InsertAfter {
+                    after: 0,
+                    text: "top\n".into(),
+                },
             ],
         )
         .unwrap();
@@ -241,7 +269,11 @@ mod tests {
             "a\nb\nc\n",
             &[
                 LineOp::Delete { start: 1, end: 1 },
-                LineOp::Replace { start: 3, end: 3, text: "C\n".into() },
+                LineOp::Replace {
+                    start: 3,
+                    end: 3,
+                    text: "C\n".into(),
+                },
             ],
         )
         .unwrap();

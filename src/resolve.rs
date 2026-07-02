@@ -30,7 +30,10 @@ pub fn resolve<'a, 't>(
 ) -> Option<Located<'a, 't>> {
     let mut matches = Vec::new();
     collect(source, data, None, anchor, &mut matches);
-    let nth = anchor.ordinal.map(|o| o.saturating_sub(1) as usize).unwrap_or(0);
+    let nth = anchor
+        .ordinal
+        .map(|o| o.saturating_sub(1) as usize)
+        .unwrap_or(0);
     matches.into_iter().nth(nth)
 }
 
@@ -45,7 +48,11 @@ fn collect<'a, 't>(
         if node.line == anchor.line {
             let bytes = &source.as_bytes()[node.span.start as usize..node.span.end as usize];
             if anchor_hash(bytes) == anchor.hash {
-                out.push(Located { node, parent, index: Some(index) });
+                out.push(Located {
+                    node,
+                    parent,
+                    index: Some(index),
+                });
             }
         }
         if let DatumKind::List { items, .. } = &node.kind {

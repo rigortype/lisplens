@@ -27,8 +27,14 @@ pub fn wrap(node: &Datum, prefix: &str) -> Vec<Edit> {
         format!("({prefix} ")
     };
     vec![
-        Edit { range: start..start, text: open },
-        Edit { range: end..end, text: ")".to_string() },
+        Edit {
+            range: start..start,
+            text: open,
+        },
+        Edit {
+            range: end..end,
+            text: ")".to_string(),
+        },
     ]
 }
 
@@ -60,7 +66,10 @@ pub fn splice(source: &str, node: &Datum) -> Option<Vec<Edit>> {
     let start = node.span.start as usize;
     let end = node.span.end as usize;
     let inner = &source[start + open_width..end - 1];
-    Some(vec![Edit { range: start..end, text: inner.to_string() }])
+    Some(vec![Edit {
+        range: start..end,
+        text: inner.to_string(),
+    }])
 }
 
 /// Forward-slurp: extend `list` rightward to swallow its `next_sibling` —
@@ -71,8 +80,14 @@ pub fn slurp_forward(list: &Datum, next_sibling: &Datum) -> Option<Vec<Edit>> {
     let close = list.span.end as usize;
     let after = next_sibling.span.end as usize;
     Some(vec![
-        Edit { range: close - 1..close, text: String::new() },
-        Edit { range: after..after, text: close_glyph(delim).to_string() },
+        Edit {
+            range: close - 1..close,
+            text: String::new(),
+        },
+        Edit {
+            range: after..after,
+            text: close_glyph(delim).to_string(),
+        },
     ])
 }
 
@@ -84,8 +99,14 @@ pub fn slurp_backward(list: &Datum, prev_sibling: &Datum) -> Option<Vec<Edit>> {
     let open = list.span.start as usize;
     let before = prev_sibling.span.start as usize;
     Some(vec![
-        Edit { range: open..open + open_width(delim), text: String::new() },
-        Edit { range: before..before, text: open_glyph(delim).to_string() },
+        Edit {
+            range: open..open + open_width(delim),
+            text: String::new(),
+        },
+        Edit {
+            range: before..before,
+            text: open_glyph(delim).to_string(),
+        },
     ])
 }
 
@@ -104,8 +125,14 @@ pub fn barf_forward(list: &Datum) -> Option<Vec<Edit>> {
         list.span.start as usize + open_width(delim)
     };
     Some(vec![
-        Edit { range: insert_at..insert_at, text: close_glyph(delim).to_string() },
-        Edit { range: close - 1..close, text: String::new() },
+        Edit {
+            range: insert_at..insert_at,
+            text: close_glyph(delim).to_string(),
+        },
+        Edit {
+            range: close - 1..close,
+            text: String::new(),
+        },
     ])
 }
 
@@ -124,8 +151,14 @@ pub fn barf_backward(list: &Datum) -> Option<Vec<Edit>> {
         list.span.end as usize - 1
     };
     Some(vec![
-        Edit { range: open..open + open_width(delim), text: String::new() },
-        Edit { range: insert_at..insert_at, text: open_glyph(delim).to_string() },
+        Edit {
+            range: open..open + open_width(delim),
+            text: String::new(),
+        },
+        Edit {
+            range: insert_at..insert_at,
+            text: open_glyph(delim).to_string(),
+        },
     ])
 }
 
@@ -139,8 +172,14 @@ pub fn split(list: &Datum, after_index: usize) -> Option<Vec<Edit>> {
     let left_end = items[after_index].span.end as usize;
     let right_start = items[after_index + 1].span.start as usize;
     Some(vec![
-        Edit { range: left_end..left_end, text: close_glyph(delim).to_string() },
-        Edit { range: right_start..right_start, text: open_glyph(delim).to_string() },
+        Edit {
+            range: left_end..left_end,
+            text: close_glyph(delim).to_string(),
+        },
+        Edit {
+            range: right_start..right_start,
+            text: open_glyph(delim).to_string(),
+        },
     ])
 }
 
@@ -153,8 +192,14 @@ pub fn join(first: &Datum, second: &Datum) -> Option<Vec<Edit>> {
     let fclose = first.span.end as usize;
     let sopen = second.span.start as usize;
     Some(vec![
-        Edit { range: fclose - 1..fclose, text: String::new() },
-        Edit { range: sopen..sopen + open_width(sdelim), text: String::new() },
+        Edit {
+            range: fclose - 1..fclose,
+            text: String::new(),
+        },
+        Edit {
+            range: sopen..sopen + open_width(sdelim),
+            text: String::new(),
+        },
     ])
 }
 
@@ -322,7 +367,10 @@ mod tests {
     fn split_divides_a_list_after_a_child() {
         let src = "(hello world)";
         let p = parse(src, &Options::scheme());
-        assert_eq!(apply(src, split(top(&p), 0).unwrap()).unwrap(), "(hello) (world)");
+        assert_eq!(
+            apply(src, split(top(&p), 0).unwrap()).unwrap(),
+            "(hello) (world)"
+        );
     }
 
     #[test]

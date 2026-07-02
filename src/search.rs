@@ -105,7 +105,16 @@ pub fn find_symbol(root: &Path, symbol: &str) -> std::io::Result<Vec<Occurrence>
 /// Render definition hits as `file:line:hash kind name` lines.
 pub fn hits_text(hits: &[Hit]) -> String {
     hits.iter()
-        .map(|h| format!("{}:{}:{} {} {}\n", h.file.display(), h.line, h.hash, h.kind, h.name))
+        .map(|h| {
+            format!(
+                "{}:{}:{} {} {}\n",
+                h.file.display(),
+                h.line,
+                h.hash,
+                h.kind,
+                h.name
+            )
+        })
         .collect()
 }
 
@@ -115,7 +124,12 @@ pub fn occurrences_text(occurrences: &[Occurrence], name: &str) -> String {
         .iter()
         .map(|o| {
             let class = if o.in_code { "code" } else { "data" };
-            format!("{}:{}:{} {class} {name}\n", o.file.display(), o.line, o.hash)
+            format!(
+                "{}:{}:{} {class} {name}\n",
+                o.file.display(),
+                o.line,
+                o.hash
+            )
         })
         .collect()
 }
@@ -151,7 +165,11 @@ mod tests {
     #[test]
     fn finds_a_definition_across_files_and_skips_non_lisp() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("a.el"), "(defun target () 1)\n(defun other () 2)\n").unwrap();
+        std::fs::write(
+            dir.path().join("a.el"),
+            "(defun target () 1)\n(defun other () 2)\n",
+        )
+        .unwrap();
         std::fs::create_dir(dir.path().join("sub")).unwrap();
         std::fs::write(dir.path().join("sub/b.scm"), "(define target 3)\n").unwrap();
         std::fs::write(dir.path().join("readme.txt"), "(defun target () ignored)\n").unwrap();
@@ -168,7 +186,11 @@ mod tests {
     #[test]
     fn find_symbol_tags_code_vs_data_occurrences() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("a.scm"), "(foo bar)\n'(foo baz)\n(list foo)\n").unwrap();
+        std::fs::write(
+            dir.path().join("a.scm"),
+            "(foo bar)\n'(foo baz)\n(list foo)\n",
+        )
+        .unwrap();
 
         let occ = find_symbol(dir.path(), "foo").unwrap();
         assert_eq!(occ.len(), 3, "{occ:?}");

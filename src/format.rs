@@ -86,13 +86,29 @@ pub struct Touched<'a> {
 /// Auto-format reindent: reindent the whole top-level form(s) overlapping any of
 /// `ranges`. Used for the touched region of a Structural edit.
 pub fn reindent_range(source: &str, config: &FormatConfig, ranges: &[Range<usize>]) -> String {
-    reindent(source, config, None, Touched { expand: ranges, exact: &[] })
+    reindent(
+        source,
+        config,
+        None,
+        Touched {
+            expand: ranges,
+            exact: &[],
+        },
+    )
 }
 
 /// Block reindent: reindent exactly the lines of `block` (one form, possibly
 /// nested), in full file context — the explicit `format`-by-anchor path.
 pub fn reindent_block(source: &str, config: &FormatConfig, block: Range<usize>) -> String {
-    reindent(source, config, None, Touched { expand: &[], exact: std::slice::from_ref(&block) })
+    reindent(
+        source,
+        config,
+        None,
+        Touched {
+            expand: &[],
+            exact: std::slice::from_ref(&block),
+        },
+    )
 }
 
 /// The general touched-region reindent (see [`Touched`]), optionally measuring
@@ -171,7 +187,10 @@ fn format_elisp_impl(
             // (Emacs `indent-for-comment`) — independent of nesting or any
             // earlier column. `;;` comments fall through to the code path.
             new_indent[i] = config.comment_column;
-            lines.push(format!("{}{trimmed}", render_indent(config.comment_column, config)));
+            lines.push(format!(
+                "{}{trimmed}",
+                render_indent(config.comment_column, config)
+            ));
         } else {
             let indent = {
                 let cols = Cols {
@@ -208,12 +227,21 @@ fn render_indent(col: usize, config: &FormatConfig) -> String {
 /// mark every line of each enclosing top-level form (so a form is reindented in
 /// full and stays self-consistent); `exact` ranges mark only the lines they
 /// span (one form by anchor).
-fn touched_line_mask(data: &[Datum], index: &LineIndex, count: usize, touched: Touched) -> Vec<bool> {
+fn touched_line_mask(
+    data: &[Datum],
+    index: &LineIndex,
+    count: usize,
+    touched: Touched,
+) -> Vec<bool> {
     let mut mask = vec![false; count];
     let mut mark = |from: usize, to: usize| {
         let l0 = index.offset_to_line_col(from as u32).0 as usize - 1;
         let l1 = index.offset_to_line_col(to.saturating_sub(1) as u32).0 as usize - 1;
-        for m in mask.iter_mut().take(l1.min(count.saturating_sub(1)) + 1).skip(l0) {
+        for m in mask
+            .iter_mut()
+            .take(l1.min(count.saturating_sub(1)) + 1)
+            .skip(l0)
+        {
             *m = true;
         }
     };
@@ -231,7 +259,12 @@ fn touched_line_mask(data: &[Datum], index: &LineIndex, count: usize, touched: T
 
 /// Record, per line, each Nameless-composed symbol's start offset and the
 /// columns its prefix collapses by (ADR-0030).
-fn collect_savings(data: &[Datum], index: &LineIndex, nl: &Nameless, out: &mut [Vec<(u32, usize)>]) {
+fn collect_savings(
+    data: &[Datum],
+    index: &LineIndex,
+    nl: &Nameless,
+    out: &mut [Vec<(u32, usize)>],
+) {
     for d in data {
         match &d.kind {
             DatumKind::Symbol(s) => {
@@ -269,12 +302,16 @@ fn container_at<'a, 't>(data: &'a [Datum<'t>], offset: usize) -> Option<&'a Datu
                     // Emacs reads `(a b c)` — opens its own containing sexp.
                     if let Some(t) = tail {
                         if (t.span.start as usize) < offset && offset < (t.span.end as usize) {
-                            return Some(container_at(std::slice::from_ref(t), offset).unwrap_or(d));
+                            return Some(
+                                container_at(std::slice::from_ref(t), offset).unwrap_or(d),
+                            );
                         }
                     }
                     Some(d)
                 }
-                DatumKind::Prefixed { inner, .. } => container_at(std::slice::from_ref(inner), offset),
+                DatumKind::Prefixed { inner, .. } => {
+                    container_at(std::slice::from_ref(inner), offset)
+                }
                 _ => None,
             };
         }
@@ -669,7 +706,10 @@ kw))
                   kw))
 ";
         let nl = Nameless::for_file("php-mode.el");
-        assert_eq!(format_elisp_nameless(input, &FormatConfig::default(), &nl), expected);
+        assert_eq!(
+            format_elisp_nameless(input, &FormatConfig::default(), &nl),
+            expected
+        );
         // Off by default: without Nameless the alignment is the literal width.
         assert!(format_elisp(input, &FormatConfig::default())
             .contains("\n                          another-arg)"));
@@ -719,11 +759,20 @@ kw))
     #[test]
     fn lone_semicolon_comment_aligns_to_comment_column() {
         let input = "(defun f ()\n; margin\n;; code\n(bar))\n";
-        let expected = format!("(defun f ()\n{}; margin\n  ;; code\n  (bar))\n", " ".repeat(40));
+        let expected = format!(
+            "(defun f ()\n{}; margin\n  ;; code\n  (bar))\n",
+            " ".repeat(40)
+        );
         assert_eq!(format_elisp(input, &FormatConfig::default()), expected);
 
-        let cfg = FormatConfig { comment_column: 20, ..FormatConfig::default() };
-        let expected20 = format!("(defun f ()\n{}; margin\n  ;; code\n  (bar))\n", " ".repeat(20));
+        let cfg = FormatConfig {
+            comment_column: 20,
+            ..FormatConfig::default()
+        };
+        let expected20 = format!(
+            "(defun f ()\n{}; margin\n  ;; code\n  (bar))\n",
+            " ".repeat(20)
+        );
         assert_eq!(format_elisp(input, &cfg), expected20);
     }
 
@@ -742,8 +791,11 @@ kw))
         assert_eq!(out, "(defun a ()\n(x))\n(defun b ()\n  (y))\n");
 
         // A range in the first form reindents that one instead.
-        let out2 =
-            reindent_range(source, &FormatConfig::default(), std::slice::from_ref(&(0..1)));
+        let out2 = reindent_range(
+            source,
+            &FormatConfig::default(),
+            std::slice::from_ref(&(0..1)),
+        );
         assert_eq!(out2, "(defun a ()\n  (x))\n(defun b ()\n(y))\n");
     }
 
@@ -787,7 +839,10 @@ else)
         then
     else)
 ";
-        let cfg = FormatConfig { body_indent: 4, ..FormatConfig::default() };
+        let cfg = FormatConfig {
+            body_indent: 4,
+            ..FormatConfig::default()
+        };
         assert_eq!(format_elisp(input, &cfg), expected);
     }
 
