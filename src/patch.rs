@@ -22,7 +22,7 @@ use std::path::Path;
 
 use lispexp::{Datum, DatumKind, Dialect, LineIndex, Options};
 
-use crate::edit::{splice, Edit, SpliceError};
+use crate::edit::{splice, splice_tracked, Edit, SpliceError};
 use crate::hash::{anchor_hash, file_hash};
 use crate::write::{verify_and_write, WriteError};
 
@@ -416,7 +416,17 @@ pub fn apply_struct_patch(
         edits.extend(build_struct_edits(&source, &parsed.data, op, &located)?);
     }
 
-    let new_content = splice(&source, edits).map_err(ApplyError::Splice)?;
+    let (spliced, spans) = splice_tracked(&source, edits).map_err(ApplyError::Splice)?;
+    // Auto-format the touched region (ADR-0025/0028): reindent the top-level
+    // forms the edits fell within, leaving the rest byte-identical. Structural
+    // only — Line-hash edits stay literal (ADR-0027) — and Emacs Lisp only, the
+    // one dialect with a formatter so far.
+    let new_content = if dialect == Dialect::EmacsLisp {
+        let config = crate::config::resolve(path, &spliced);
+        crate::format::reindent_range(&spliced, &config, &spans)
+    } else {
+        spliced
+    };
     verify_and_write(path, &patch.file_hash, &new_content, &options).map_err(ApplyError::Write)?;
     Ok(Outcome {
         new_file_hash: file_hash(new_content.as_bytes()),
@@ -512,6 +522,29 @@ mod tests {
         let patch = parse_line_patch("@ abc123\ndelete 3:9999\n").unwrap();
         assert_eq!(patch.file_hash, "abc123");
         assert_eq!(patch.ops.len(), 1);
+    }
+
+    #[test]
+    fn struct_edit_auto_formats_only_the_touched_form() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.el");
+        let source = "(defun a ()\n  (x))\n(defun b ()\n  (y))\n";
+        std::fs::write(&path, source).unwrap();
+        let fh = file_hash(source.as_bytes());
+        // Replace `(x)` (line 2) with a flat multi-line body.
+        let h = anchor_hash("(x)".as_bytes());
+        let patch = parse_struct_patch(&format!(
+            "@ {fh}\nreplace 2:{h} <<END\n(when c\n(foo)\n(bar))\nEND\n"
+        ))
+        .unwrap();
+        let out = apply_struct_patch(&path, &patch, Dialect::EmacsLisp).unwrap();
+        let written = std::fs::read_to_string(&path).unwrap();
+        // Form `a` (touched) is reindented; form `b` stays byte-identical.
+        assert_eq!(
+            written,
+            "(defun a ()\n  (when c\n    (foo)\n    (bar)))\n(defun b ()\n  (y))\n"
+        );
+        assert_eq!(out.new_file_hash, file_hash(written.as_bytes()));
     }
 
     #[test]

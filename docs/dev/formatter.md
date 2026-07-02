@@ -155,4 +155,15 @@ alignment is still off by a column or two. Close them one at a time with the
 harness. Note the harness's Emacs side can't see a file's own `(declare (indent
 …))` (it doesn't evaluate the file), so a file that indents by its own macros
 will show harness diffs where lisplens is in fact right — cross-check against the
-original. Other dialects and touched-region auto-format are future work.
+original. Other dialects are future work.
+
+## Touched-region reindent (ADR-0025/0028)
+
+`format::reindent_range(source, config, ranges)` reindents only the top-level
+forms overlapping any byte `range`, leaving every other line byte-identical — the
+whole-file loop with a per-line "is this line in a touched form?" gate
+(`touched_line_mask`). Each touched form is reindented in full so its internal
+alignment stays self-consistent (a form's alignment targets are all within it).
+`apply_struct_patch` calls it after `edit::splice_tracked` (which returns each
+edit's post-splice byte span), gated to Emacs Lisp; the returned file-hash is of
+the reindented content. Line-hash edits stay literal (ADR-0027).

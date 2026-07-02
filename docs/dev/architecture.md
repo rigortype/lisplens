@@ -56,12 +56,14 @@ insert-after / insert-before.
 
 ## Safety pipeline (both modes)
 
-drift (strict file-hash, ADR-0017) → splice → validate-then-write (reject edits
-that add parse errors, compared by lispexp `ErrorKind` multiset, ADR-0005) →
-atomic write (temp + rename, preserves mode, follows symlinks). Success returns
-the new file-hash + warnings (disappeared definitions, ADR-0024). Structural
-mode should auto-format the touched region (ADR-0025/0028 — not yet wired);
-Line-hash stays verbatim (ADR-0027).
+drift (strict file-hash, ADR-0017) → splice → **auto-format the touched region**
+(Structural + Emacs Lisp only) → validate-then-write (reject edits that add parse
+errors, compared by lispexp `ErrorKind` multiset, ADR-0005) → atomic write (temp
++ rename, preserves mode, follows symlinks). Success returns the new file-hash
+(of the *formatted* content) + warnings (disappeared definitions, ADR-0024).
+Structural mode reindents the top-level forms the edits fell within via
+`format::reindent_range` (ADR-0025/0028), using the post-splice edit spans from
+`edit::splice_tracked`; Line-hash stays verbatim (ADR-0027).
 
 ## Backend
 

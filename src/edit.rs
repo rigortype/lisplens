@@ -38,10 +38,21 @@ pub enum SpliceError {
 /// resolved against the **original** offsets (ADR-0006). `edits` order is
 /// irrelevant — they are sorted internally — and the whole batch is
 /// all-or-nothing: any overlap or bad range rejects the entire batch.
-pub fn splice(source: &str, mut edits: Vec<Edit>) -> Result<String, SpliceError> {
+pub fn splice(source: &str, edits: Vec<Edit>) -> Result<String, SpliceError> {
+    splice_tracked(source, edits).map(|(out, _)| out)
+}
+
+/// Like [`splice`], but also returns — for each edit, in applied (sorted) order —
+/// the byte range its inserted `text` occupies in the result. Used to locate the
+/// touched region for auto-format (ADR-0025/0028).
+pub fn splice_tracked(
+    source: &str,
+    mut edits: Vec<Edit>,
+) -> Result<(String, Vec<Range<usize>>), SpliceError> {
     edits.sort_by_key(|e| (e.range.start, e.range.end));
     let mut out = String::with_capacity(source.len());
     let mut cursor = 0usize;
+    let mut spans = Vec::with_capacity(edits.len());
     for edit in &edits {
         let Range { start, end } = edit.range;
         if start > end
@@ -55,11 +66,13 @@ pub fn splice(source: &str, mut edits: Vec<Edit>) -> Result<String, SpliceError>
             return Err(SpliceError::Overlap);
         }
         out.push_str(&source[cursor..start]);
+        let new_start = out.len();
         out.push_str(&edit.text);
+        spans.push(new_start..out.len());
         cursor = end;
     }
     out.push_str(&source[cursor..]);
-    Ok(out)
+    Ok((out, spans))
 }
 
 /// A line-oriented edit operation referencing 1-based line numbers from the

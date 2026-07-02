@@ -17,6 +17,8 @@
 //! never changes what a file parses to — and these gaps are closed iteratively
 //! against the Emacs oracle (ADR-0026).
 
+use std::ops::Range;
+
 use lispexp::indent::{harvest_indent_specs, IndentSpec, IndentTable};
 use lispexp::{parse, Datum, DatumKind, LineIndex, Options};
 
@@ -61,16 +63,28 @@ impl Cols<'_> {
 /// whitespace on each line is recomputed; tokens and line order are untouched,
 /// so this never changes what the file parses to.
 pub fn format_elisp(source: &str, config: &FormatConfig) -> String {
-    format_elisp_impl(source, config, None)
+    format_elisp_impl(source, config, None, None)
 }
 
 /// Like [`format_elisp`], but measuring columns as they display under Nameless
 /// (ADR-0030) — used when the caller opts into Nameless emulation for a file.
 pub fn format_elisp_nameless(source: &str, config: &FormatConfig, nameless: &Nameless) -> String {
-    format_elisp_impl(source, config, Some(nameless))
+    format_elisp_impl(source, config, Some(nameless), None)
 }
 
-fn format_elisp_impl(source: &str, config: &FormatConfig, nameless: Option<&Nameless>) -> String {
+/// Touched-region reindent (ADR-0025/0028): reindent only the top-level forms
+/// overlapping any of `ranges` (byte offsets into `source`); every other line is
+/// byte-identical. Used to auto-format the forms an edit fell within.
+pub fn reindent_range(source: &str, config: &FormatConfig, ranges: &[Range<usize>]) -> String {
+    format_elisp_impl(source, config, None, Some(ranges))
+}
+
+fn format_elisp_impl(
+    source: &str,
+    config: &FormatConfig,
+    nameless: Option<&Nameless>,
+    touched: Option<&[Range<usize>]>,
+) -> String {
     let parsed = parse(source, &Options::emacs_lisp());
     let mut table = builtin_indent_table();
     table.merge(harvest_indent_specs(source));
@@ -93,12 +107,24 @@ fn format_elisp_impl(source: &str, config: &FormatConfig, nameless: Option<&Name
         .collect();
     let mut new_indent = vec![0usize; count];
 
+    // For a touched-region reindent, which lines fall in a top-level form that an
+    // edit overlapped. `None` means reindent every line (whole-file format).
+    let touched_mask = touched.map(|ranges| touched_line_mask(&parsed.data, &index, count, ranges));
+
     let mut lines: Vec<String> = Vec::with_capacity(count);
     for n in 1..=count as u32 {
         let range = index.line_range(n).expect("n within line_count");
         let content = &source[range.clone()];
         let trimmed = content.trim_start();
         let i = n as usize - 1;
+
+        // Outside a touched form: keep the line byte-identical, and record its
+        // existing indent so any (same-form) reference stays correct.
+        if touched_mask.as_ref().is_some_and(|m| !m[i]) {
+            new_indent[i] = old_indent[i];
+            lines.push(content.to_string());
+            continue;
+        }
 
         if trimmed.is_empty() {
             new_indent[i] = 0;
@@ -148,6 +174,31 @@ fn render_indent(col: usize, config: &FormatConfig) -> String {
     } else {
         " ".repeat(col)
     }
+}
+
+/// Lines that fall inside a top-level form overlapping any touched byte range
+/// (ADR-0025/0028's "touched region"). A form overlaps a range when the range
+/// touches its span; a whole such form is reindented so its internal alignment
+/// stays self-consistent.
+fn touched_line_mask(
+    data: &[Datum],
+    index: &LineIndex,
+    count: usize,
+    ranges: &[Range<usize>],
+) -> Vec<bool> {
+    let mut mask = vec![false; count];
+    for d in data {
+        let (fs, fe) = (d.span.start as usize, d.span.end as usize);
+        if !ranges.iter().any(|r| r.start < fe && fs <= r.end) {
+            continue;
+        }
+        let l0 = index.offset_to_line_col(fs as u32).0 as usize - 1;
+        let l1 = index.offset_to_line_col(fe.saturating_sub(1) as u32).0 as usize - 1;
+        for m in mask.iter_mut().take(l1.min(count.saturating_sub(1)) + 1).skip(l0) {
+            *m = true;
+        }
+    }
+    mask
 }
 
 /// Record, per line, each Nameless-composed symbol's start offset and the
@@ -635,6 +686,26 @@ kw))
         let cfg = FormatConfig { comment_column: 20, ..FormatConfig::default() };
         let expected20 = format!("(defun f ()\n{}; margin\n  ;; code\n  (bar))\n", " ".repeat(20));
         assert_eq!(format_elisp(input, &cfg), expected20);
+    }
+
+    /// A touched-region reindent rewrites only the top-level forms an edit
+    /// overlapped; other forms stay byte-identical, even if misindented.
+    #[test]
+    fn reindent_range_touches_only_overlapping_forms() {
+        let source = "(defun a ()\n(x))\n(defun b ()\n(y))\n";
+        let second = source.find("(defun b").unwrap();
+        let out = reindent_range(
+            source,
+            &FormatConfig::default(),
+            std::slice::from_ref(&(second..second + 1)),
+        );
+        // Second form reindented (body at col 2); first left flat.
+        assert_eq!(out, "(defun a ()\n(x))\n(defun b ()\n  (y))\n");
+
+        // A range in the first form reindents that one instead.
+        let out2 =
+            reindent_range(source, &FormatConfig::default(), std::slice::from_ref(&(0..1)));
+        assert_eq!(out2, "(defun a ()\n  (x))\n(defun b ()\n(y))\n");
     }
 
     /// `lisp-body-indent` (config `body_indent`) scales every structural step:
