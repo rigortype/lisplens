@@ -3,7 +3,7 @@
 Reads and edit results share a **single internal model** (anchors, hashes, spans, diagnostics). Both the CLI and the MCP server render it as **terse text by default** — the token-efficient wire format the whole product optimizes for. The MCP server can additionally return **structured JSON on request** for consumers that want typed data.
 
 - **Line-hash reads** use hashline's format: a `[path#FILEHASH]` header, then `LINE:hash|content` lines.
-- The **Structural Outline** uses a compact `line hash kind name` form, with nesting shown by indentation.
+- The **Structural Outline** uses a compact `line hash kind name` form, with nesting shown by indentation. **`name` is always the last column**, because a Lisp name can contain spaces (e.g. a piped symbol `|a b|`) and must not be split by the column separator (space is the safe separator — ADR-0016).
 
 Every read **embeds the file-level and per-anchor hashes**, so its output is directly usable as edit-anchor input — saving a second round-trip. Exact delimiter glyphs are deferred (see the open path-syntax question).
 

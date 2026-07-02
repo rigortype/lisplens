@@ -3,6 +3,12 @@
 //!
 //! This mode needs no parse tree — it works on raw text, so it is fully
 //! decoupled from the lispexp reader.
+//!
+//! Line-ending policy (ADR-0008): a line's anchor hash is computed over the
+//! line's content **excluding its terminator**, so LF/CRLF and a
+//! present-or-absent final newline do not spuriously drift a line. The
+//! file-level hash still covers the whole verbatim byte stream, so a
+//! line-ending change is caught there.
 
 use crate::hash::{anchor_hash, file_hash};
 

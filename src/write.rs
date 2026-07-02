@@ -1,14 +1,19 @@
 //! Safe writes: drift check, validate-then-write, atomic replace
-//! (ADR-0005, ADR-0008).
+//! (ADR-0005, ADR-0008, ADR-0017).
 //!
 //! The safety contract is simply: **never make a file's syntax worse.** An edit
-//! is refused if the file drifted since the read it was based on, or if it would
-//! introduce new parse errors; otherwise the new content is written atomically.
-//! Shared by both edit modes and independent of how the edit was expressed.
+//! is refused if the file drifted since the read it was based on (strict,
+//! file-level; ADR-0017), or if it would introduce new parse errors; otherwise
+//! the new content is written atomically, preserving the target's permissions
+//! and following symlinks to their target. Shared by both edit modes and
+//! independent of how the edit was expressed.
 
+use std::collections::HashMap;
+use std::io::Write as _;
 use std::path::Path;
 
-use lispexp::{parse, Options};
+use lispexp::{parse, ErrorKind, Options, ParseError};
+use tempfile::NamedTempFile;
 
 use crate::hash::file_hash;
 
@@ -23,13 +28,13 @@ pub enum WriteError {
         /// The file's current hash.
         actual: String,
     },
-    /// The edit would raise the parse-error count above the pre-edit baseline
-    /// (ADR-0005). Edits that repair or preserve validity are allowed.
+    /// The edit would introduce parse errors not present before it (ADR-0005),
+    /// compared by lispexp's position-stable [`ErrorKind`], not by count — an
+    /// edit that swaps one error for another of the same total count is still
+    /// refused. Each string is a newly-introduced error's human-readable form.
     NewParseErrors {
-        /// Parse-error count before the edit.
-        before: usize,
-        /// Parse-error count the edit would produce.
-        after: usize,
+        /// The errors the edit would newly introduce.
+        introduced: Vec<String>,
     },
     /// A filesystem error while reading or writing.
     Io(std::io::Error),
@@ -45,11 +50,9 @@ impl From<std::io::Error> for WriteError {
 /// `new_content` to `path` atomically.
 ///
 /// `expected_file_hash` is the [`file_hash`](crate::hash::file_hash) the edit
-/// was based on. `options` selects the dialect for the parse-error baseline.
-///
-/// Note: the baseline comparison is by error *count* for now; ADR-0005's "new
-/// errors" is ideally a set/position diff — a later refinement behind this same
-/// signature.
+/// was based on; a mismatch is [`WriteError::Drift`] (strict, file-level —
+/// ADR-0017; per-anchor relaxed acceptance is a future opt-in). `options`
+/// selects the dialect for the parse-error baseline.
 pub fn verify_and_write(
     path: &Path,
     expected_file_hash: &str,
@@ -66,28 +69,51 @@ pub fn verify_and_write(
         });
     }
 
-    let before = parse(&current, options).errors.len();
-    let after = parse(new_content, options).errors.len();
-    if after > before {
-        return Err(WriteError::NewParseErrors { before, after });
+    let before = parse(&current, options);
+    let after = parse(new_content, options);
+    let introduced = newly_introduced(&before.errors, &after.errors);
+    if !introduced.is_empty() {
+        return Err(WriteError::NewParseErrors { introduced });
     }
 
     write_atomically(path, new_content)?;
     Ok(())
 }
 
-/// Write `content` to `path` atomically: write a sibling temp file, then rename
-/// it over the target (atomic within one filesystem).
+/// The parse errors present in `after` beyond those already in `before`,
+/// compared as a multiset of position-stable [`ErrorKind`]s so that edits which
+/// merely shift the position of a pre-existing error are not flagged.
+fn newly_introduced(before: &[ParseError], after: &[ParseError]) -> Vec<String> {
+    let mut allowance: HashMap<&ErrorKind, i32> = HashMap::new();
+    for err in before {
+        *allowance.entry(&err.kind).or_insert(0) += 1;
+    }
+    let mut introduced = Vec::new();
+    for err in after {
+        let remaining = allowance.entry(&err.kind).or_insert(0);
+        if *remaining > 0 {
+            *remaining -= 1;
+        } else {
+            introduced.push(err.kind.to_string());
+        }
+    }
+    introduced
+}
+
+/// Write `content` to `path` atomically: write a sibling temp file, copy the
+/// target's permissions onto it, then rename it over the target (atomic within
+/// one filesystem). `path` is canonicalized first, so a symlink is written
+/// through to its target rather than being replaced by a regular file.
 fn write_atomically(path: &Path, content: &str) -> std::io::Result<()> {
-    let dir = path.parent().filter(|p| !p.as_os_str().is_empty());
-    let dir = dir.unwrap_or_else(|| Path::new("."));
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "out".to_string());
-    let tmp = dir.join(format!(".{name}.lisplens.tmp"));
-    std::fs::write(&tmp, content)?;
-    std::fs::rename(&tmp, path)?;
+    let target = std::fs::canonicalize(path)?;
+    let dir = target.parent().unwrap_or_else(|| Path::new("."));
+
+    let mut tmp = NamedTempFile::new_in(dir)?;
+    tmp.write_all(content.as_bytes())?;
+    tmp.as_file().sync_all()?;
+    tmp.as_file()
+        .set_permissions(std::fs::metadata(&target)?.permissions())?;
+    tmp.persist(&target).map_err(|e| e.error)?;
     Ok(())
 }
 
@@ -114,6 +140,23 @@ mod tests {
     }
 
     #[test]
+    fn preserves_the_target_file_mode() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let dir = tempfile::tempdir().unwrap();
+            let path = write_file(dir.path(), "script.ros", "(f 1)\n");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let expected = file_hash("(f 1)\n".as_bytes());
+
+            verify_and_write(&path, &expected, "(f 2)\n", &Options::scheme()).unwrap();
+
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o755, "exec bit must survive the edit");
+        }
+    }
+
+    #[test]
     fn refuses_a_drifted_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_file(dir.path(), "a.scm", "(f 1)\n");
@@ -134,7 +177,7 @@ mod tests {
 
         let err = verify_and_write(&path, &expected, "(f 1\n", &Options::scheme()).unwrap_err();
 
-        assert!(matches!(err, WriteError::NewParseErrors { .. }));
+        assert!(matches!(err, WriteError::NewParseErrors { introduced } if !introduced.is_empty()));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "(f 1)\n"); // unchanged
     }
 
@@ -147,5 +190,18 @@ mod tests {
         verify_and_write(&path, &expected, "(f 1)\n", &Options::scheme()).unwrap();
 
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "(f 1)\n");
+    }
+
+    #[test]
+    fn allows_an_edit_that_only_shifts_an_existing_error() {
+        // A pre-existing unclosed list stays; the edit adds a valid line above it,
+        // shifting the error's position but not introducing a new one.
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_file(dir.path(), "a.scm", "(f 1\n");
+        let expected = file_hash("(f 1\n".as_bytes());
+
+        verify_and_write(&path, &expected, "(g 2)\n(f 1\n", &Options::scheme()).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "(g 2)\n(f 1\n");
     }
 }
