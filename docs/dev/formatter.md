@@ -132,11 +132,14 @@ not `cargo test`.
 
 ## Config resolution (ADR-0029)
 
-`config::resolve(path, source) -> FormatConfig{indent_tabs, tab_width}`.
+`config::resolve(path, source) -> FormatConfig{indent_tabs, tab_width, body_indent}`.
 Precedence (high→low): file-local (`-*-` header + `Local Variables:` footer) >
 `.dir-locals-2.el` > `.dir-locals.el` (up the tree, nearer wins) >
 `.editorconfig` (up to `root=true`, glob-matched) > defaults (spaces,
-tab-width 8). dir-locals are parsed with lispexp; the EditorConfig glob supports
+tab-width 8, `lisp-body-indent` 2). `body_indent` is Emacs's `lisp-body-indent`
+— the width of one structural step (`open_col + body`, and `2×body` for a
+specform's 1st/2nd distinguished args); EditorConfig `indent_size` maps to it.
+dir-locals are parsed with lispexp; the EditorConfig glob supports
 `*` `**` `?` `[set]` `{alt}`.
 
 ## Known fidelity gaps
@@ -149,5 +152,4 @@ alignment is still off by a column or two. Close them one at a time with the
 harness. Note the harness's Emacs side can't see a file's own `(declare (indent
 …))` (it doesn't evaluate the file), so a file that indents by its own macros
 will show harness diffs where lisplens is in fact right — cross-check against the
-original. Other dialects, touched-region auto-format, and
-`lisp-body-indent`/`indent_size` overrides are future work.
+original. Other dialects and touched-region auto-format are future work.

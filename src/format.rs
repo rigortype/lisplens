@@ -23,8 +23,6 @@ use lispexp::{parse, Datum, DatumKind, LineIndex, Options};
 use crate::config::FormatConfig;
 use crate::nameless::Nameless;
 
-const BODY: usize = 2; // lisp-body-indent
-
 /// Column arithmetic that accounts for reindentation already applied to earlier
 /// lines: an element's output column is its offset within its line (stable under
 /// reindent) plus that line's *new* indent. Alignment targets always sit on a
@@ -123,7 +121,7 @@ fn format_elisp_impl(source: &str, config: &FormatConfig, nameless: Option<&Name
                     savings: &savings,
                 };
                 match container_at(&parsed.data, range.start) {
-                    Some(c) => indent_for(&cols, &table, c, range.start),
+                    Some(c) => indent_for(&cols, &table, c, range.start, config.body_indent),
                     None => 0,
                 }
             };
@@ -220,16 +218,19 @@ fn in_string(data: &[Datum], offset: usize) -> bool {
     false
 }
 
-/// The indent column for a line starting at `offset` inside list `c`.
-fn indent_for(cols: &Cols, table: &IndentTable, c: &Datum, offset: usize) -> usize {
+/// The indent column for a line starting at `offset` inside list `c`. `body` is
+/// `lisp-body-indent` (columns per structural step).
+fn indent_for(cols: &Cols, table: &IndentTable, c: &Datum, offset: usize, body: usize) -> usize {
     let DatumKind::List { items, .. } = &c.kind else {
         return 0;
     };
     let open_col = cols.col(c.span.start as usize);
     let normal = normal_indent(cols, c, items, open_col, offset);
     match items.first().and_then(as_symbol).and_then(|h| table.get(h)) {
-        Some(IndentSpec::Number(n)) => specform(cols, items, offset, open_col, *n as usize, normal),
-        Some(IndentSpec::Defun) => open_col + BODY,
+        Some(IndentSpec::Number(n)) => {
+            specform(cols, items, offset, open_col, *n as usize, normal, body)
+        }
+        Some(IndentSpec::Defun) => open_col + body,
         // A named indent function can't be run (reader-only), and any other or
         // future spec falls back to function-call alignment.
         _ => normal,
@@ -277,8 +278,16 @@ fn normal_indent(cols: &Cols, c: &Datum, items: &[Datum], open_col: usize, offse
     cols.col(first.span.start as usize)
 }
 
-/// `lisp-indent-specform` for an integer spec `n`.
-fn specform(cols: &Cols, items: &[Datum], offset: usize, open_col: usize, n: usize, normal: usize) -> usize {
+/// `lisp-indent-specform` for an integer spec `n`. `body` is `lisp-body-indent`.
+fn specform(
+    cols: &Cols,
+    items: &[Datum],
+    offset: usize,
+    open_col: usize,
+    n: usize,
+    normal: usize,
+    body: usize,
+) -> usize {
     // Arguments (past the head) fully completed before this line.
     let k = items
         .iter()
@@ -288,7 +297,7 @@ fn specform(cols: &Cols, items: &[Datum], offset: usize, open_col: usize, n: usi
     if k < n {
         // A distinguished form: the 1st/2nd get 2×body, the rest align.
         if k <= 1 {
-            open_col + 2 * BODY
+            open_col + 2 * body
         } else {
             normal
         }
@@ -301,7 +310,7 @@ fn specform(cols: &Cols, items: &[Datum], offset: usize, open_col: usize, n: usi
             Some(fb) if cols.line_of(fb.span.start as usize) < cols.line_of(offset) => {
                 cols.col(fb.span.start as usize)
             }
-            _ => open_col + BODY,
+            _ => open_col + body,
         }
     }
 }
@@ -606,6 +615,33 @@ kw))
           ,(compute)))
 ";
         assert_eq!(format_elisp(input, &FormatConfig::default()), expected);
+    }
+
+    /// `lisp-body-indent` (config `body_indent`) scales every structural step:
+    /// a body form lands at `open_col + body`, a specform's 1st/2nd distinguished
+    /// at `open_col + 2*body`. Golden from Emacs with `lisp-body-indent` = 4.
+    #[test]
+    fn body_indent_override_matches_emacs() {
+        let input = "\
+(defun foo (x)
+(bar x))
+(when c
+(a))
+(if test
+then
+else)
+";
+        let expected = "\
+(defun foo (x)
+    (bar x))
+(when c
+    (a))
+(if test
+        then
+    else)
+";
+        let cfg = FormatConfig { body_indent: 4, ..FormatConfig::default() };
+        assert_eq!(format_elisp(input, &cfg), expected);
     }
 
     /// A dotted pair with a lone car (`'(eval . FORM)`, the font-lock idiom)

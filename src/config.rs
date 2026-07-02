@@ -14,11 +14,14 @@ pub struct FormatConfig {
     pub indent_tabs: bool,
     /// Emacs `tab-width`: columns per tab.
     pub tab_width: usize,
+    /// Emacs `lisp-body-indent`: columns for one structural indent step
+    /// (a `def…` body, a specform's distinguished/body args). Default 2.
+    pub body_indent: usize,
 }
 
 impl Default for FormatConfig {
     fn default() -> Self {
-        FormatConfig { indent_tabs: false, tab_width: 8 }
+        FormatConfig { indent_tabs: false, tab_width: 8, body_indent: 2 }
     }
 }
 
@@ -44,6 +47,11 @@ fn set_var(cfg: &mut FormatConfig, var: &str, val: &str) {
         "tab-width" => {
             if let Ok(n) = val.trim().parse::<usize>() {
                 cfg.tab_width = n;
+            }
+        }
+        "lisp-body-indent" => {
+            if let Ok(n) = val.trim().parse::<usize>() {
+                cfg.body_indent = n;
             }
         }
         _ => {}
@@ -179,6 +187,7 @@ fn apply_editorconfig(path: &Path, cfg: &mut FormatConfig) {
     let abs = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let mut set_style = false;
     let mut set_tab = false;
+    let mut set_size = false;
     for dir in abs.ancestors().skip(1) {
         let Ok(content) = std::fs::read_to_string(dir.join(".editorconfig")) else {
             continue;
@@ -197,6 +206,12 @@ fn apply_editorconfig(path: &Path, cfg: &mut FormatConfig) {
                 set_tab = true;
             }
         }
+        if !set_size {
+            if let Some(v) = props.indent_size {
+                cfg.body_indent = v;
+                set_size = true;
+            }
+        }
         if is_root {
             break;
         }
@@ -207,6 +222,8 @@ fn apply_editorconfig(path: &Path, cfg: &mut FormatConfig) {
 struct EcProps {
     indent_tabs: Option<bool>,
     tab_width: Option<usize>,
+    /// EditorConfig `indent_size` → `lisp-body-indent`.
+    indent_size: Option<usize>,
 }
 
 /// Parse one `.editorconfig`, returning the properties for `rel` (later matching
@@ -250,6 +267,7 @@ fn editorconfig_props(content: &str, rel: &str) -> (EcProps, bool) {
     if props.tab_width.is_none() {
         props.tab_width = indent_size;
     }
+    props.indent_size = indent_size;
     (props, is_root)
 }
 
@@ -407,5 +425,20 @@ mod tests {
         assert_eq!(props.indent_tabs, Some(true));
         assert_eq!(props.tab_width, Some(4));
         assert!(root);
+    }
+
+    #[test]
+    fn lisp_body_indent_resolves_from_file_local_and_editorconfig() {
+        // File-local `lisp-body-indent` (a `:safe` Emacs var) sets body_indent.
+        let mut c = FormatConfig::default();
+        assert_eq!(c.body_indent, 2);
+        apply_file_locals(";;; x -*- lisp-body-indent: 4 -*-\n(foo)\n", &mut c);
+        assert_eq!(c.body_indent, 4);
+
+        // EditorConfig `indent_size` maps to body_indent (and, EditorConfig's
+        // own rule, to tab_width when tab_width is unset).
+        let (props, _) = editorconfig_props("[*.el]\nindent_size = 3\n", "foo.el");
+        assert_eq!(props.indent_size, Some(3));
+        assert_eq!(props.tab_width, Some(3));
     }
 }

@@ -11,7 +11,7 @@ Resolution applies sources low-to-high so higher overrides: defaults → EditorC
 
 ## Scope
 
-Variables consumed: `indent-tabs-mode` and `tab-width`. EditorConfig maps `indent_style` → `indent-tabs-mode`, `tab_width` → `tab-width`. Overriding the structural indent unit (`lisp-body-indent` / EditorConfig `indent_size`) is future work.
+Variables consumed: `indent-tabs-mode`, `tab-width`, and `lisp-body-indent` (the structural indent unit, default 2). EditorConfig maps `indent_style` → `indent-tabs-mode`, `tab_width` → `tab-width`, and `indent_size` → `lisp-body-indent`. The same precedence applies to all three.
 
 ## Status
 
@@ -19,6 +19,6 @@ accepted
 
 ## Consequences
 
-- The indenter computes indentation as visual columns (unchanged); only the rendering of a line's leading whitespace depends on `indent-tabs-mode` / `tab-width`.
+- The indenter computes indentation as visual columns; the *width* of a structural step is `lisp-body-indent` (so it scales body forms and `2×` distinguished args), while `indent-tabs-mode` / `tab-width` only affect how a line's leading whitespace is rendered.
 - Default output is space-indented, matching the formatter's prior behavior and common Lisp style.
 - `.dir-locals.el` is parsed with lispexp; EditorConfig globs support the common subset (`*`, `**`, `?`, `[…]`, `{…}`).

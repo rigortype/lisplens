@@ -6,9 +6,12 @@ in the dev docs** (see `AGENTS.md` → Codebase): `docs/dev/architecture.md`,
 
 ## Now
 
-- 87 tests pass, `cargo clippy --all-targets` clean; tree clean. 30 ADRs.
+- 89 tests pass, `cargo clippy --all-targets` clean; tree clean. 30 ADRs.
 - On **lispexp 0.5** (`dot_span` for improper-list dots — our upstream ask,
   shipped).
+- **`lisp-body-indent` / EditorConfig `indent_size` overrides** now resolved
+  through `FormatConfig.body_indent` (ADR-0029), scaling every structural step;
+  byte-exact vs Emacs with `lisp-body-indent` 4.
 - **First-release goal: a faithful Emacs Lisp formatter.**
 - **Long-tail closed** (all verified byte-exact vs Emacs, 0 regressions across
   emacs `lisp/` + magit/lem sweeps): data lists vs function calls
@@ -39,6 +42,7 @@ in the dev docs** (see `AGENTS.md` → Codebase): `docs/dev/architecture.md`,
    `apply_struct_patch`.
 3. **More real-world elisp validation** — header/footer and tab-mode files;
    config resolution end-to-end on real repos.
-4. Other dialects' formatters; `lisp-body-indent` / EditorConfig `indent_size`
-   overrides; MCP edit JSON op-array; S-expr structural addresses.
-5. lispexp asks — `docs/lispexp-integration.md`, `docs/lispexp-feedback/`.
+4. Single `;` own-line comments → `comment-column` (via lispexp's `lex` layer;
+   low priority — see `docs/lispexp-feedback/0002…`).
+5. Other dialects' formatters; MCP edit JSON op-array; S-expr structural
+   addresses.
