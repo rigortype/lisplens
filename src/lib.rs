@@ -5,6 +5,7 @@
 //! full design — Structural / Line-hash modes, Batch edits, drift detection,
 //! the pluggable formatter — lives in `CONTEXT.md` and `docs/adr/`.
 
+pub mod apply;
 pub mod edit;
 pub mod hash;
 pub mod linehash;
