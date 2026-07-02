@@ -1,0 +1,15 @@
+[package]
+name = "lisplens"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.70"
+license = "MPL-2.0"
+description = "Token-efficient, polyglot Lisp editing for AI agents (CLI/MCP), built on lispexp"
+readme = "README.md"
+repository = "https://github.com/rigortype/lisplens"
+authors = ["USAMI Kenta <tadsan@zonu.me>"]
+keywords = ["lisp", "s-expression", "editing", "mcp", "agent"]
+categories = ["command-line-utilities", "development-tools"]
+
+[dependencies]
+lispexp = "0.2"
