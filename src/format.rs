@@ -109,6 +109,11 @@ fn format_elisp_impl(source: &str, config: &FormatConfig, nameless: Option<&Name
             // Inside a multi-line string: leave the line byte-identical.
             new_indent[i] = old_indent[i];
             lines.push(content.to_string());
+        } else if trimmed.starts_with(";;;") {
+            // Emacs's `lisp-indent-line` never reindents a `;;;` comment line
+            // (three comment-start chars) — its column is left as written.
+            new_indent[i] = old_indent[i];
+            lines.push(content.to_string());
         } else {
             let indent = {
                 let cols = Cols {
@@ -173,7 +178,19 @@ fn container_at<'a, 't>(data: &'a [Datum<'t>], offset: usize) -> Option<&'a Datu
         let (start, end) = (d.span.start as usize, d.span.end as usize);
         if start < offset && offset < end {
             return match &d.kind {
-                DatumKind::List { items, .. } => Some(container_at(items, offset).unwrap_or(d)),
+                DatumKind::List { items, tail, .. } => {
+                    if let Some(inner) = container_at(items, offset) {
+                        return Some(inner);
+                    }
+                    // A dotted tail that is itself a list — `(a . (b c))`, as
+                    // Emacs reads `(a b c)` — opens its own containing sexp.
+                    if let Some(t) = tail {
+                        if (t.span.start as usize) < offset && offset < (t.span.end as usize) {
+                            return Some(container_at(std::slice::from_ref(t), offset).unwrap_or(d));
+                        }
+                    }
+                    Some(d)
+                }
                 DatumKind::Prefixed { inner, .. } => container_at(std::slice::from_ref(inner), offset),
                 _ => None,
             };
@@ -189,7 +206,12 @@ fn in_string(data: &[Datum], offset: usize) -> bool {
         if start < offset && offset < end {
             return match &d.kind {
                 DatumKind::Str(_) => true,
-                DatumKind::List { items, .. } => in_string(items, offset),
+                DatumKind::List { items, tail, .. } => {
+                    in_string(items, offset)
+                        || tail
+                            .as_ref()
+                            .is_some_and(|t| in_string(std::slice::from_ref(t), offset))
+                }
                 DatumKind::Prefixed { inner, .. } => in_string(std::slice::from_ref(inner), offset),
                 _ => false,
             };
@@ -204,9 +226,9 @@ fn indent_for(cols: &Cols, table: &IndentTable, c: &Datum, offset: usize) -> usi
         return 0;
     };
     let open_col = cols.col(c.span.start as usize);
-    let normal = normal_indent(cols, c, items, open_col);
+    let normal = normal_indent(cols, c, items, open_col, offset);
     match items.first().and_then(as_symbol).and_then(|h| table.get(h)) {
-        Some(IndentSpec::Number(n)) => specform(items, offset, open_col, *n as usize, normal),
+        Some(IndentSpec::Number(n)) => specform(cols, items, offset, open_col, *n as usize, normal),
         Some(IndentSpec::Defun) => open_col + BODY,
         // A named indent function can't be run (reader-only), and any other or
         // future spec falls back to function-call alignment.
@@ -214,16 +236,28 @@ fn indent_for(cols: &Cols, table: &IndentTable, c: &Datum, offset: usize) -> usi
     }
 }
 
-/// Function-call alignment (`calculate-lisp-indent`'s `normal-indent`).
-fn normal_indent(cols: &Cols, c: &Datum, items: &[Datum], open_col: usize) -> usize {
+/// Function-call alignment (`calculate-lisp-indent`'s `normal-indent`). `offset`
+/// is the start of the line being indented.
+fn normal_indent(cols: &Cols, c: &Datum, items: &[Datum], open_col: usize, offset: usize) -> usize {
     let Some(first) = items.first() else {
         return open_col + 1;
     };
-    // First element is a list → indent under that list.
-    if matches!(first.kind, DatumKind::List { .. }) {
+    // No element completed on an earlier line → Emacs's "indent-point
+    // immediately follows the open paren" case: indent just past it. This also
+    // avoids aligning under an element on the current (or a later) line, whose
+    // new indent is not yet known — the self-reference that flattened
+    // comment-led data lists to column 0.
+    if cols.line_of(first.span.start as usize) >= cols.line_of(offset) {
+        return open_col + 1;
+    }
+    // A head that isn't a symbol-like token (a list, string, char or prefixed
+    // form) marks data, not a function call: Emacs's `lisp-indent-function`
+    // "car is not a symbol" path aligns every element under the first one.
+    if !head_is_symbol_like(first) {
         return cols.col(first.span.start as usize);
     }
-    // A first argument on the open-paren's line → align under it.
+    // A function call whose first argument sits on the open-paren's line →
+    // align the rest under that argument.
     if let Some(second) = items.get(1) {
         if cols.line_of(c.span.start as usize) == cols.line_of(second.span.start as usize) {
             return cols.col(second.span.start as usize);
@@ -234,7 +268,7 @@ fn normal_indent(cols: &Cols, c: &Datum, items: &[Datum], open_col: usize) -> us
 }
 
 /// `lisp-indent-specform` for an integer spec `n`.
-fn specform(items: &[Datum], offset: usize, open_col: usize, n: usize, normal: usize) -> usize {
+fn specform(cols: &Cols, items: &[Datum], offset: usize, open_col: usize, n: usize, normal: usize) -> usize {
     // Arguments (past the head) fully completed before this line.
     let k = items
         .iter()
@@ -249,8 +283,32 @@ fn specform(items: &[Datum], offset: usize, open_col: usize, n: usize, normal: u
             normal
         }
     } else {
-        // A body form.
-        open_col + BODY
+        // A body form. Emacs aligns body forms under the first body form; when
+        // that form began on an earlier line, indent under it, otherwise this
+        // line is the first body form and indents one body step past the open
+        // paren. (`(progn (a)` puts later body under `(a)`, not at open_col+2.)
+        match items.get(n + 1) {
+            Some(fb) if cols.line_of(fb.span.start as usize) < cols.line_of(offset) => {
+                cols.col(fb.span.start as usize)
+            }
+            _ => open_col + BODY,
+        }
+    }
+}
+
+/// Whether a list's head reads as a symbol for indentation (Emacs's
+/// `\\sw\\|\\s_` test on the first character after any reader prefix). Symbols,
+/// keywords, numbers and char literals qualify; strings and lists do not. A
+/// prefixed form (`'x`, `,x`, `` `x ``, `#'x`) defers to what it wraps — so
+/// `,sym` is a call head but `,(list)` and `'(list)` are data.
+fn head_is_symbol_like(d: &Datum) -> bool {
+    match &d.kind {
+        DatumKind::Symbol(_)
+        | DatumKind::Keyword(_)
+        | DatumKind::Number(_)
+        | DatumKind::Char(_) => true,
+        DatumKind::Prefixed { inner, .. } => head_is_symbol_like(inner),
+        _ => false,
     }
 }
 
@@ -500,6 +558,53 @@ kw))
         // Off by default: without Nameless the alignment is the literal width.
         assert!(format_elisp(input, &FormatConfig::default())
             .contains("\n                          another-arg)"));
+    }
+
+    /// Data lists (non-symbol head), dotted-tail sublists, `progn`-style body
+    /// forms that start on the open-paren line, and prefixed heads — golden
+    /// captured from Emacs `indent-region`.
+    #[test]
+    fn matches_emacs_on_data_lists_and_prefixed_heads() {
+        let input = "\
+(defconst names
+'(;; leading comment
+\"a\" \"b\"
+\"c\"))
+(defvar styles
+`((a . ((x . 1)
+(y . 2)))))
+(defun f ()
+(progn (a)
+(b)))
+(defun g ()
+`(,head first
+,(compute)))
+";
+        let expected = "\
+(defconst names
+  '(;; leading comment
+    \"a\" \"b\"
+    \"c\"))
+(defvar styles
+  `((a . ((x . 1)
+          (y . 2)))))
+(defun f ()
+  (progn (a)
+         (b)))
+(defun g ()
+  `(,head first
+          ,(compute)))
+";
+        assert_eq!(format_elisp(input, &FormatConfig::default()), expected);
+    }
+
+    /// A `;;;` comment line keeps its column (Emacs never reindents one), while
+    /// `;;` comments indent as code.
+    #[test]
+    fn triple_semicolon_comment_is_left_in_place() {
+        let input = "(defun f ()\n;; two\n;;; three\n(body))\n";
+        let expected = "(defun f ()\n  ;; two\n;;; three\n  (body))\n";
+        assert_eq!(format_elisp(input, &FormatConfig::default()), expected);
     }
 
     #[test]

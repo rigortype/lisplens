@@ -14,13 +14,23 @@ indent spec:
 
 - **`Number(n)`** (specform): the first `n` args are *distinguished* — the 1st/2nd
   land at `open_col + 4` (2×`lisp-body-indent`), a 3rd+ distinguished aligns like
-  a call; args past `n` are *body* at `open_col + 2`.
+  a call; args past `n` are *body*. Body forms align under the **first** body
+  form; only when that first body form itself begins the line (nothing body
+  before it) do they land at `open_col + 2`. So `(progn (a)` puts a later `(b)`
+  under `(a)`, not at `open_col + 2`.
 - **`Defun`**: body at `open_col + 2`.
-- **no spec / unknown head / named indent fn** (can't run): function-call
-  alignment — under the first argument if it's on the open-paren's line, else
-  `open_col + 1`; if the head is itself a list, under that first element.
+- **no spec / unknown head / named indent fn** (can't run): alignment depends on
+  the head. A **symbol-like head** (`lisp-indent-function`'s `\sw\|\s_` test:
+  symbol, keyword, number, char, or a reader-prefixed form wrapping one — `,sym`)
+  is a *function call*: align under the first argument if it's on the open-paren's
+  line, else under the head. A **non-symbol head** (string, list, or a prefix
+  wrapping one — `'(…)`, `,(…)`) is *data*: align every element under the first
+  one. When no element is completed on an earlier line, indent `open_col + 1`.
 
-Multi-line strings are left untouched. Reindentation only rewrites leading
+A dotted-tail sublist — `(a . (b c))`, which Emacs reads as `(a b c)` — opens its
+own containing sexp; `container_at` descends into the tail so its elements indent
+against it. A `;;;` comment line is never reindented (Emacs leaves it in place),
+matching the multi-line-string rule. Reindentation only rewrites leading
 whitespace, so it can never change what the file parses to (it is always safe).
 
 ### The key invariant — do not regress
@@ -126,7 +136,12 @@ tab-width 8). dir-locals are parsed with lispexp; the EditorConfig glob supports
 ## Known fidelity gaps
 
 Nested specforms where Emacs's `(COLUMN . start)` list-return semantics differ
-from the plain column (e.g. a long `if-let` condition), and package-local macros
-not in the bundled/harvested specs (e.g. sgml-mode's own, ob-ruby). Close them
-one at a time with the harness. Other dialects, touched-region auto-format, and
+from the plain column (e.g. a long `if-let` condition); package-local macros not
+in the bundled/harvested specs (e.g. sgml-mode's own, ob-ruby); and some `rx`
+forms led by a char literal (`(? …)` = the space char `?\s`), whose sub-form
+alignment is still off by a column or two. Close them one at a time with the
+harness. Note the harness's Emacs side can't see a file's own `(declare (indent
+…))` (it doesn't evaluate the file), so a file that indents by its own macros
+will show harness diffs where lisplens is in fact right — cross-check against the
+original. Other dialects, touched-region auto-format, and
 `lisp-body-indent`/`indent_size` overrides are future work.

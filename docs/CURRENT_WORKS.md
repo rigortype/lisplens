@@ -6,15 +6,22 @@ in the dev docs** (see `AGENTS.md` → Codebase): `docs/dev/architecture.md`,
 
 ## Now
 
-- 83 tests pass, `cargo clippy --all-targets` clean; tree clean. 30 ADRs.
+- 85 tests pass, `cargo clippy --all-targets` clean; tree clean. 30 ADRs.
 - **First-release goal: a faithful Emacs Lisp formatter.**
-- Formatter fidelity: 20 random `~/local/src/emacs/lisp` files, stripped and
-  reformatted, diffed against Emacs `indent-region` → **12/20 byte-exact,
-  ~99.0% of lines match**. (Harness: `docs/dev/formatter.md`.)
+- Formatter fidelity keeps climbing as the long tail closes. Latest regression
+  sweep (old vs new binary, same corpora): emacs `lisp/` **15→22 byte-exact of
+  32**, magit/lem **22 files improved, 0 regressed**. (Harness:
+  `docs/dev/formatter.md`.)
+- **Long-tail closed**: data lists vs function calls (`lisp-indent-function`'s
+  non-symbol-head path), `progn`-style body forms that start on the open line,
+  dotted-tail sublists (`(a . (b c))`), and `;;;` comment lines left in place.
+  On `php-mode/lisp` this took php-mode.el from 166→3 harness diffs; 10/13 files
+  byte-exact (php-mode-debug.el's remaining diffs are a harness artifact — batch
+  Emacs ignores its file-local `(declare (indent 1))`, which lisplens harvests,
+  so lisplens reproduces the checked-in file exactly).
 - **Nameless-aware indentation (ADR-0030)**: `format --nameless` models
   Nameless's namespace-prefix composition (`php-`→`:`, `font-lock-`→`fl:`) in
-  the column model. On `php-mode/lisp` all seven Nameless-affected lines match
-  Emacs (2/5 files byte-exact; the rest diff only on the pre-existing long tail).
+  the column model.
 
 ## Next steps (priority order)
 
