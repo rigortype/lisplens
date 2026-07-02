@@ -23,6 +23,9 @@ use crate::hash::anchor_hash;
 pub struct OutlineEntry {
     /// 1-based start line of the definition.
     pub line: u32,
+    /// Nesting depth: 0 for a top-level definition, +1 per enclosing
+    /// definition (e.g. a Scheme internal `define`). Shown by indentation.
+    pub depth: u32,
     /// 4-hex anchor hash over the form's verbatim span bytes.
     pub hash: String,
     /// The defining head symbol, verbatim (e.g. `define`, `cl-defun`).
@@ -39,13 +42,26 @@ pub struct OutlineEntry {
 pub fn outline(source: &str, dialect: Dialect) -> Vec<OutlineEntry> {
     let parsed = parse(source, &Options::for_dialect(dialect));
     let registry = bundled_registry(dialect);
+    // annotate_tree yields forms in pre-order (outer before the inner forms it
+    // contains), so a stack of enclosing-definition end offsets gives each
+    // form's nesting depth by span containment.
+    let mut enclosing: Vec<u32> = Vec::new();
     annotate_tree(&parsed.data, &registry)
         .iter()
-        .map(|form| OutlineEntry {
-            line: form.form.line,
-            hash: anchor_hash(span_bytes(source, form.form)),
-            kind: form.head.to_string(),
-            name: form.first(Role::Name).and_then(name_text),
+        .map(|form| {
+            let (start, end) = (form.form.span.start, form.form.span.end);
+            while enclosing.last().is_some_and(|&e| e <= start) {
+                enclosing.pop();
+            }
+            let depth = enclosing.len() as u32;
+            enclosing.push(end);
+            OutlineEntry {
+                line: form.form.line,
+                depth,
+                hash: anchor_hash(span_bytes(source, form.form)),
+                kind: form.head.to_string(),
+                name: form.first(Role::Name).and_then(name_text),
+            }
         })
         .collect()
 }
@@ -106,8 +122,21 @@ mod tests {
         assert_eq!(entries[0].kind, "define");
         assert_eq!(entries[0].name.as_deref(), Some("square"));
         assert_eq!(entries[0].line, 1);
+        assert_eq!(entries[0].depth, 0);
         assert_eq!(entries[0].hash.len(), 4);
         assert_eq!(entries[1].name.as_deref(), Some("pi"));
+    }
+
+    #[test]
+    fn nested_definitions_get_a_deeper_depth() {
+        let src = "(define (outer)\n  (define inner 1)\n  inner)\n";
+        let entries = outline(src, Dialect::Scheme);
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].name.as_deref(), Some("outer"));
+        assert_eq!(entries[0].depth, 0);
+        assert_eq!(entries[1].name.as_deref(), Some("inner"));
+        assert_eq!(entries[1].depth, 1);
     }
 
     #[test]

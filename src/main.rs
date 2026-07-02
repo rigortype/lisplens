@@ -44,8 +44,11 @@ fn run_outline(path: PathBuf) -> ExitCode {
     let dialect = lisplens::dialect_for_path(&path);
     for entry in lisplens::outline(&source, dialect) {
         let name = entry.name.as_deref().unwrap_or("-");
-        // ADR-0013 Outline columns: line, hash, kind, name (name last).
-        println!("{:>5}  {}  {}  {}", entry.line, entry.hash, entry.kind, name);
+        // ADR-0013 Outline columns: line, hash, kind, name (name last). Nesting
+        // is shown by indenting the name column (name can contain spaces, so it
+        // must stay last).
+        let indent = "  ".repeat(entry.depth as usize);
+        println!("{:>5}  {}  {}  {indent}{name}", entry.line, entry.hash, entry.kind);
     }
     ExitCode::SUCCESS
 }
