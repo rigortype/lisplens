@@ -63,6 +63,133 @@ pub fn splice(source: &str, node: &Datum) -> Option<Vec<Edit>> {
     Some(vec![Edit { range: start..end, text: inner.to_string() }])
 }
 
+/// Forward-slurp: extend `list` rightward to swallow its `next_sibling` —
+/// `(foo (bar baz) quux zot)` → `(foo (bar baz quux) zot)`. Moves the list's
+/// closing delimiter to just after `next_sibling`.
+pub fn slurp_forward(list: &Datum, next_sibling: &Datum) -> Option<Vec<Edit>> {
+    let (delim, _) = as_list(list)?;
+    let close = list.span.end as usize;
+    let after = next_sibling.span.end as usize;
+    Some(vec![
+        Edit { range: close - 1..close, text: String::new() },
+        Edit { range: after..after, text: close_glyph(delim).to_string() },
+    ])
+}
+
+/// Backward-slurp: extend `list` leftward to swallow its `prev_sibling` —
+/// `(foo bar (baz quux) zot)` → `(foo (bar baz quux) zot)`. Moves the list's
+/// opening delimiter to just before `prev_sibling`.
+pub fn slurp_backward(list: &Datum, prev_sibling: &Datum) -> Option<Vec<Edit>> {
+    let (delim, _) = as_list(list)?;
+    let open = list.span.start as usize;
+    let before = prev_sibling.span.start as usize;
+    Some(vec![
+        Edit { range: open..open + open_width(delim), text: String::new() },
+        Edit { range: before..before, text: open_glyph(delim).to_string() },
+    ])
+}
+
+/// Forward-barf: expel `list`'s last element out to the right —
+/// `(foo (bar baz quux) zot)` → `(foo (bar baz) quux zot)`. `None` if the list
+/// is empty.
+pub fn barf_forward(list: &Datum) -> Option<Vec<Edit>> {
+    let (delim, items) = as_list(list)?;
+    if items.is_empty() {
+        return None;
+    }
+    let close = list.span.end as usize;
+    let insert_at = if items.len() >= 2 {
+        items[items.len() - 2].span.end as usize
+    } else {
+        list.span.start as usize + open_width(delim)
+    };
+    Some(vec![
+        Edit { range: insert_at..insert_at, text: close_glyph(delim).to_string() },
+        Edit { range: close - 1..close, text: String::new() },
+    ])
+}
+
+/// Backward-barf: expel `list`'s first element out to the left —
+/// `(foo (bar baz quux) zot)` → `(foo bar (baz quux) zot)`. `None` if the list
+/// is empty.
+pub fn barf_backward(list: &Datum) -> Option<Vec<Edit>> {
+    let (delim, items) = as_list(list)?;
+    if items.is_empty() {
+        return None;
+    }
+    let open = list.span.start as usize;
+    let insert_at = if items.len() >= 2 {
+        items[1].span.start as usize
+    } else {
+        list.span.end as usize - 1
+    };
+    Some(vec![
+        Edit { range: open..open + open_width(delim), text: String::new() },
+        Edit { range: insert_at..insert_at, text: open_glyph(delim).to_string() },
+    ])
+}
+
+/// Split `list` into two after child `after_index` — `(a b c)` split after 0 →
+/// `(a) (b c)`. `None` if there is no child after `after_index`.
+pub fn split(list: &Datum, after_index: usize) -> Option<Vec<Edit>> {
+    let (delim, items) = as_list(list)?;
+    if after_index + 1 >= items.len() {
+        return None;
+    }
+    let left_end = items[after_index].span.end as usize;
+    let right_start = items[after_index + 1].span.start as usize;
+    Some(vec![
+        Edit { range: left_end..left_end, text: close_glyph(delim).to_string() },
+        Edit { range: right_start..right_start, text: open_glyph(delim).to_string() },
+    ])
+}
+
+/// Join two adjacent sibling lists into one — `(a) (b)` → `(a b)`. Removes
+/// `first`'s closing delimiter and `second`'s opening delimiter. `None` if
+/// either node is not a list.
+pub fn join(first: &Datum, second: &Datum) -> Option<Vec<Edit>> {
+    as_list(first)?;
+    let (sdelim, _) = as_list(second)?;
+    let fclose = first.span.end as usize;
+    let sopen = second.span.start as usize;
+    Some(vec![
+        Edit { range: fclose - 1..fclose, text: String::new() },
+        Edit { range: sopen..sopen + open_width(sdelim), text: String::new() },
+    ])
+}
+
+/// The list's delimiter and its children, or `None` for a non-list.
+fn as_list<'a, 't>(node: &'a Datum<'t>) -> Option<(&'a Delim, &'a [Datum<'t>])> {
+    match &node.kind {
+        DatumKind::List { delim, items, .. } => Some((delim, items)),
+        _ => None,
+    }
+}
+
+fn open_glyph(delim: &Delim) -> &'static str {
+    match delim {
+        Delim::Round => "(",
+        Delim::Square => "[",
+        Delim::Curly => "{",
+        Delim::Set => "#{",
+    }
+}
+
+fn close_glyph(delim: &Delim) -> &'static str {
+    match delim {
+        Delim::Round => ")",
+        Delim::Square => "]",
+        Delim::Curly | Delim::Set => "}",
+    }
+}
+
+fn open_width(delim: &Delim) -> usize {
+    match delim {
+        Delim::Set => 2,
+        Delim::Round | Delim::Square | Delim::Curly => 1,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,5 +242,61 @@ mod tests {
     fn splice_of_a_non_list_is_none() {
         let parsed = parse("sym", &Options::scheme());
         assert!(splice("sym", top(&parsed)).is_none());
+    }
+
+    fn items<'a, 't>(node: &'a Datum<'t>) -> &'a [Datum<'t>] {
+        match &node.kind {
+            DatumKind::List { items, .. } => items,
+            _ => panic!("not a list"),
+        }
+    }
+
+    #[test]
+    fn slurp_forward_swallows_the_next_sibling() {
+        let src = "(foo (bar baz) quux zot)";
+        let p = parse(src, &Options::scheme());
+        let outer = top(&p);
+        let edits = slurp_forward(&items(outer)[1], &items(outer)[2]).unwrap();
+        assert_eq!(apply(src, edits).unwrap(), "(foo (bar baz quux) zot)");
+    }
+
+    #[test]
+    fn slurp_backward_swallows_the_previous_sibling() {
+        let src = "(foo bar (baz quux) zot)";
+        let p = parse(src, &Options::scheme());
+        let outer = top(&p);
+        let edits = slurp_backward(&items(outer)[2], &items(outer)[1]).unwrap();
+        assert_eq!(apply(src, edits).unwrap(), "(foo (bar baz quux) zot)");
+    }
+
+    #[test]
+    fn barf_forward_expels_the_last_element() {
+        let src = "(foo (bar baz quux) zot)";
+        let p = parse(src, &Options::scheme());
+        let edits = barf_forward(&items(top(&p))[1]).unwrap();
+        assert_eq!(apply(src, edits).unwrap(), "(foo (bar baz) quux zot)");
+    }
+
+    #[test]
+    fn barf_backward_expels_the_first_element() {
+        let src = "(foo (bar baz quux) zot)";
+        let p = parse(src, &Options::scheme());
+        let edits = barf_backward(&items(top(&p))[1]).unwrap();
+        assert_eq!(apply(src, edits).unwrap(), "(foo bar (baz quux) zot)");
+    }
+
+    #[test]
+    fn split_divides_a_list_after_a_child() {
+        let src = "(hello world)";
+        let p = parse(src, &Options::scheme());
+        assert_eq!(apply(src, split(top(&p), 0).unwrap()).unwrap(), "(hello) (world)");
+    }
+
+    #[test]
+    fn join_merges_two_adjacent_lists() {
+        let src = "(hello) (world)";
+        let p = parse(src, &Options::scheme());
+        let edits = join(&p.data[0], &p.data[1]).unwrap();
+        assert_eq!(apply(src, edits).unwrap(), "(hello world)");
     }
 }
