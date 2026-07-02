@@ -82,6 +82,9 @@ fn report(result: Result<lisplens::patch::Outcome, lisplens::patch::ApplyError>)
     match result {
         Ok(outcome) => {
             println!("ok {}", outcome.new_file_hash);
+            for warning in &outcome.warnings {
+                eprintln!("warning: {warning}");
+            }
             ExitCode::SUCCESS
         }
         Err(err) => {
@@ -102,8 +105,8 @@ fn run_line_edit(path: PathBuf) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let options = lisplens::options_for_path(&path);
-    report(lisplens::patch::apply_line_patch(&path, &patch, &options))
+    let dialect = lisplens::dialect_for_path(&path);
+    report(lisplens::patch::apply_line_patch(&path, &patch, dialect))
 }
 
 fn run_struct_edit(path: PathBuf) -> ExitCode {
@@ -117,8 +120,8 @@ fn run_struct_edit(path: PathBuf) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let options = lisplens::options_for_path(&path);
-    report(lisplens::patch::apply_struct_patch(&path, &patch, &options))
+    let dialect = lisplens::dialect_for_path(&path);
+    report(lisplens::patch::apply_struct_patch(&path, &patch, dialect))
 }
 
 fn run_find(name: &str, dir: &str) -> ExitCode {

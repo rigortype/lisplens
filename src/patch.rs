@@ -20,7 +20,7 @@
 
 use std::path::Path;
 
-use lispexp::{Datum, DatumKind, LineIndex, Options};
+use lispexp::{Datum, DatumKind, Dialect, LineIndex, Options};
 
 use crate::edit::{splice, Edit, SpliceError};
 use crate::hash::{anchor_hash, file_hash};
@@ -107,6 +107,9 @@ impl From<std::io::Error> for ApplyError {
 pub struct Outcome {
     /// The file's hash after the write — the gate for a subsequent batch.
     pub new_file_hash: String,
+    /// Validate-then-write warnings: definitions no longer recognized after the
+    /// edit (ADR-0024). The edit still succeeded.
+    pub warnings: Vec<String>,
 }
 
 fn parse_anchor(token: &str) -> Result<Anchor, PatchError> {
@@ -206,8 +209,9 @@ fn read_heredoc<'a>(
 pub fn apply_line_patch(
     path: &Path,
     patch: &LinePatch,
-    options: &Options,
+    dialect: Dialect,
 ) -> Result<Outcome, ApplyError> {
+    let options = Options::for_dialect(dialect);
     let source = std::fs::read_to_string(path)?;
     let actual = file_hash(source.as_bytes());
     if actual != patch.file_hash {
@@ -237,9 +241,10 @@ pub fn apply_line_patch(
     }
 
     let new_content = splice(&source, edits).map_err(ApplyError::Splice)?;
-    verify_and_write(path, &patch.file_hash, &new_content, options).map_err(ApplyError::Write)?;
+    verify_and_write(path, &patch.file_hash, &new_content, &options).map_err(ApplyError::Write)?;
     Ok(Outcome {
         new_file_hash: file_hash(new_content.as_bytes()),
+        warnings: crate::disappeared_definitions(&source, &new_content, dialect),
     })
 }
 
@@ -387,8 +392,9 @@ pub fn parse_struct_patch(input: &str) -> Result<StructPatch, PatchError> {
 pub fn apply_struct_patch(
     path: &Path,
     patch: &StructPatch,
-    options: &Options,
+    dialect: Dialect,
 ) -> Result<Outcome, ApplyError> {
+    let options = Options::for_dialect(dialect);
     let source = std::fs::read_to_string(path)?;
     let actual = file_hash(source.as_bytes());
     if actual != patch.file_hash {
@@ -398,7 +404,7 @@ pub fn apply_struct_patch(
         });
     }
 
-    let parsed = lispexp::parse(&source, options);
+    let parsed = lispexp::parse(&source, &options);
     let mut edits = Vec::new();
     for op in &patch.ops {
         let located = crate::resolve::resolve(&source, &parsed.data, &op.anchor).ok_or_else(|| {
@@ -411,9 +417,10 @@ pub fn apply_struct_patch(
     }
 
     let new_content = splice(&source, edits).map_err(ApplyError::Splice)?;
-    verify_and_write(path, &patch.file_hash, &new_content, options).map_err(ApplyError::Write)?;
+    verify_and_write(path, &patch.file_hash, &new_content, &options).map_err(ApplyError::Write)?;
     Ok(Outcome {
         new_file_hash: file_hash(new_content.as_bytes()),
+        warnings: crate::disappeared_definitions(&source, &new_content, dialect),
     })
 }
 
@@ -517,7 +524,7 @@ mod tests {
         let (_d, path, fh) = temp("(a)\n(b)\n(c)\n");
         let h = line_hash("(b)");
         let patch = parse_line_patch(&format!("@ {fh}\nreplace 2:{h} <<END\n(B)\nEND\n")).unwrap();
-        let out = apply_line_patch(&path, &patch, &Options::scheme()).unwrap();
+        let out = apply_line_patch(&path, &patch, Dialect::Scheme).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "(a)\n(B)\n(c)\n");
         assert_eq!(out.new_file_hash, file_hash("(a)\n(B)\n(c)\n".as_bytes()));
     }
@@ -527,7 +534,7 @@ mod tests {
         let (_d, path, fh) = temp("(a)\n(b)\n(c)\n");
         let h = line_hash("(b)");
         let patch = parse_line_patch(&format!("@ {fh}\ndelete 2:{h}\n")).unwrap();
-        apply_line_patch(&path, &patch, &Options::scheme()).unwrap();
+        apply_line_patch(&path, &patch, Dialect::Scheme).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "(a)\n(c)\n");
     }
 
@@ -537,7 +544,7 @@ mod tests {
         let h = line_hash("(a)");
         let patch =
             parse_line_patch(&format!("@ {fh}\ninsert-after 1:{h} <<END\n(b)\nEND\n")).unwrap();
-        apply_line_patch(&path, &patch, &Options::scheme()).unwrap();
+        apply_line_patch(&path, &patch, Dialect::Scheme).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "(a)\n(b)\n(c)\n");
     }
 
@@ -545,7 +552,7 @@ mod tests {
     fn a_wrong_line_hash_is_refused() {
         let (_d, path, fh) = temp("(a)\n(b)\n");
         let patch = parse_line_patch(&format!("@ {fh}\ndelete 2:0000\n")).unwrap();
-        let err = apply_line_patch(&path, &patch, &Options::scheme()).unwrap_err();
+        let err = apply_line_patch(&path, &patch, Dialect::Scheme).unwrap_err();
         assert!(matches!(err, ApplyError::AnchorMismatch { line: 2, .. }));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "(a)\n(b)\n"); // untouched
     }
@@ -555,7 +562,7 @@ mod tests {
         let (_d, path, _fh) = temp("(a)\n");
         let patch = parse_line_patch("@ deadbeef\ndelete 1:0000\n").unwrap();
         assert!(matches!(
-            apply_line_patch(&path, &patch, &Options::scheme()),
+            apply_line_patch(&path, &patch, Dialect::Scheme),
             Err(ApplyError::Drift { .. })
         ));
     }
@@ -565,13 +572,27 @@ mod tests {
     }
 
     #[test]
+    fn an_edit_that_unrecognizes_a_definition_warns() {
+        let (_d, path, fh) = temp("(defun foo () 1)\n");
+        let h = line_hash("(defun foo () 1)");
+        let patch =
+            parse_line_patch(&format!("@ {fh}\nreplace 1:{h} <<END\n(defun)\nEND\n")).unwrap();
+        let outcome = apply_line_patch(&path, &patch, Dialect::EmacsLisp).unwrap();
+        assert!(
+            outcome.warnings.iter().any(|w| w.contains("foo")),
+            "{:?}",
+            outcome.warnings
+        );
+    }
+
+    #[test]
     fn struct_replace_swaps_a_definition_node() {
         let (_d, path, fh) = temp("(define x 1)\n(define y 2)\n");
         let h = node_hash("(define y 2)");
         let patch =
             parse_struct_patch(&format!("@ {fh}\nreplace 2:{h} <<END\n(define y 22)\nEND\n"))
                 .unwrap();
-        apply_struct_patch(&path, &patch, &Options::scheme()).unwrap();
+        apply_struct_patch(&path, &patch, Dialect::Scheme).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "(define x 1)\n(define y 22)\n");
     }
 
@@ -581,7 +602,7 @@ mod tests {
         let h = node_hash("body");
         let patch =
             parse_struct_patch(&format!("@ {fh}\nwrap 1:{h} <<END\nwhen cond\nEND\n")).unwrap();
-        apply_struct_patch(&path, &patch, &Options::scheme()).unwrap();
+        apply_struct_patch(&path, &patch, Dialect::Scheme).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "(when cond body)\n");
     }
 
@@ -590,7 +611,7 @@ mod tests {
         let (_d, path, fh) = temp("(when cond (do-thing))\n");
         let h = node_hash("(do-thing)");
         let patch = parse_struct_patch(&format!("@ {fh}\nraise 1:{h}\n")).unwrap();
-        apply_struct_patch(&path, &patch, &Options::scheme()).unwrap();
+        apply_struct_patch(&path, &patch, Dialect::Scheme).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "(do-thing)\n");
     }
 
@@ -599,7 +620,7 @@ mod tests {
         let (_d, path, fh) = temp("(foo (bar baz) quux)\n");
         let h = node_hash("(bar baz)");
         let patch = parse_struct_patch(&format!("@ {fh}\nsplice 1:{h}\n")).unwrap();
-        apply_struct_patch(&path, &patch, &Options::scheme()).unwrap();
+        apply_struct_patch(&path, &patch, Dialect::Scheme).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "(foo bar baz quux)\n");
     }
 
@@ -610,7 +631,7 @@ mod tests {
         let fh = file_hash(source.as_bytes());
         let h = node_hash(node_text);
         let patch = parse_struct_patch(&format!("@ {fh}\n{op_line} 1:{h}\n")).unwrap();
-        apply_struct_patch(&path, &patch, &Options::scheme()).unwrap();
+        apply_struct_patch(&path, &patch, Dialect::Scheme).unwrap();
         std::fs::read_to_string(&path).unwrap()
     }
 
@@ -638,7 +659,7 @@ mod tests {
         let fh = file_hash("(a b)\n".as_bytes());
         let h = node_hash("(a b)");
         let patch = parse_struct_patch(&format!("@ {fh}\nsplit 1:{h} @0\n")).unwrap();
-        apply_struct_patch(&path, &patch, &Options::scheme()).unwrap();
+        apply_struct_patch(&path, &patch, Dialect::Scheme).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "(a) (b)\n");
     }
 
@@ -651,7 +672,7 @@ mod tests {
         let h1 = node_hash("(a)");
         let h2 = node_hash("(b)");
         let patch = parse_struct_patch(&format!("@ {fh}\njoin 1:{h1} 1:{h2}\n")).unwrap();
-        apply_struct_patch(&path, &patch, &Options::scheme()).unwrap();
+        apply_struct_patch(&path, &patch, Dialect::Scheme).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "(a b)\n");
     }
 
@@ -664,7 +685,7 @@ mod tests {
         let fh = file_hash(src.as_bytes());
         let h = node_hash("(define (f x) (+ x x))");
         let patch = parse_struct_patch(&format!("@ {fh}\nrename 1:{h} x y\n")).unwrap();
-        apply_struct_patch(&path, &patch, &Options::scheme()).unwrap();
+        apply_struct_patch(&path, &patch, Dialect::Scheme).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "(define (f y) (+ y y))\n");
     }
 
@@ -674,7 +695,7 @@ mod tests {
         let h = node_hash("(define x 1)");
         let patch = parse_struct_patch(&format!("@ {fh}\nraise 1:{h}\n")).unwrap();
         assert!(matches!(
-            apply_struct_patch(&path, &patch, &Options::scheme()),
+            apply_struct_patch(&path, &patch, Dialect::Scheme),
             Err(ApplyError::NotApplicable(_))
         ));
     }

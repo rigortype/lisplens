@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 
 use crate::patch::{apply_line_patch, apply_struct_patch, parse_line_patch, parse_struct_patch};
 use crate::search::{find_definitions, find_symbol, hits_text, occurrences_text};
-use crate::{dialect_for_path, expand_text, linehash, options_for_path, outline_text};
+use crate::{dialect_for_path, expand_text, linehash, outline_text};
 
 /// Run the MCP server, reading requests from stdin and writing responses to
 /// stdout until EOF.
@@ -124,18 +124,18 @@ fn run_tool(name: &str, args: &Value) -> Result<String, String> {
             let file = arg(args, "file")?;
             let text = arg(args, "patch")?;
             let patch = parse_line_patch(text).map_err(|e| format!("patch parse error: {e:?}"))?;
-            let outcome = apply_line_patch(Path::new(file), &patch, &options_for_path(Path::new(file)))
+            let outcome = apply_line_patch(Path::new(file), &patch, dialect_for_path(Path::new(file)))
                 .map_err(|e| format!("{e:?}"))?;
-            Ok(format!("ok {}", outcome.new_file_hash))
+            Ok(edit_text(&outcome))
         }
         "struct_edit" => {
             let file = arg(args, "file")?;
             let text = arg(args, "patch")?;
             let patch = parse_struct_patch(text).map_err(|e| format!("patch parse error: {e:?}"))?;
             let outcome =
-                apply_struct_patch(Path::new(file), &patch, &options_for_path(Path::new(file)))
+                apply_struct_patch(Path::new(file), &patch, dialect_for_path(Path::new(file)))
                     .map_err(|e| format!("{e:?}"))?;
-            Ok(format!("ok {}", outcome.new_file_hash))
+            Ok(edit_text(&outcome))
         }
         "find" => {
             let name = arg(args, "name")?;
@@ -151,6 +151,15 @@ fn run_tool(name: &str, args: &Value) -> Result<String, String> {
         }
         other => Err(format!("unknown tool: {other}")),
     }
+}
+
+/// Render an edit outcome: `ok <hash>` plus any warnings on following lines.
+fn edit_text(outcome: &crate::patch::Outcome) -> String {
+    let mut text = format!("ok {}", outcome.new_file_hash);
+    for warning in &outcome.warnings {
+        text.push_str(&format!("\nwarning: {warning}"));
+    }
+    text
 }
 
 fn arg<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {

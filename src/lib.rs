@@ -16,6 +16,7 @@ pub mod search;
 pub mod structural;
 pub mod write;
 
+use std::collections::HashSet;
 use std::path::Path;
 
 use lispexp::annotate::{annotate_tree, bundled_registry, Annotated, Role};
@@ -120,6 +121,31 @@ pub struct NodeEntry {
     pub hash: String,
     /// A one-line, truncated preview of the node's source.
     pub preview: String,
+}
+
+/// The validate-then-write warnings for an edit (ADR-0005, ADR-0024): the
+/// definitions recognized in `before` but not in `after`, identified by
+/// `(kind, name)`. A disappeared definition yields one warning string.
+pub fn disappeared_definitions(before: &str, after: &str, dialect: Dialect) -> Vec<String> {
+    fn defs(source: &str, dialect: Dialect) -> HashSet<(String, Option<String>)> {
+        outline(source, dialect)
+            .into_iter()
+            .map(|e| (e.kind, e.name))
+            .collect()
+    }
+    let after_defs = defs(after, dialect);
+    let mut warnings: Vec<String> = defs(before, dialect)
+        .into_iter()
+        .filter(|d| !after_defs.contains(d))
+        .map(|(kind, name)| {
+            format!(
+                "definition `{}` ({kind}) no longer recognized",
+                name.as_deref().unwrap_or("?")
+            )
+        })
+        .collect();
+    warnings.sort();
+    warnings
 }
 
 /// Render the Outline of `source` as terse text (`line hash kind name [sig]`,
