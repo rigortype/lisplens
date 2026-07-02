@@ -7,6 +7,7 @@
 
 pub mod apply;
 pub mod edit;
+pub mod format;
 pub mod hash;
 pub mod linehash;
 pub mod mcp;
@@ -20,7 +21,9 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use lispexp::annotate::{annotate_tree, bundled_registry, Annotated, Role};
-use lispexp::{parse, Datum, DatumKind, Dialect, Options};
+use lispexp::{parse, Datum, DatumKind, Options};
+
+pub use lispexp::Dialect;
 
 use crate::hash::anchor_hash;
 

@@ -104,7 +104,7 @@ fn newly_introduced(before: &[ParseError], after: &[ParseError]) -> Vec<String> 
 /// target's permissions onto it, then rename it over the target (atomic within
 /// one filesystem). `path` is canonicalized first, so a symlink is written
 /// through to its target rather than being replaced by a regular file.
-fn write_atomically(path: &Path, content: &str) -> std::io::Result<()> {
+pub fn write_atomically(path: &Path, content: &str) -> std::io::Result<()> {
     let target = std::fs::canonicalize(path)?;
     let dir = target.parent().unwrap_or_else(|| Path::new("."));
 

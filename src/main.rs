@@ -18,6 +18,7 @@ fn main() -> ExitCode {
         ["find", name, dir] => run_find(name, dir),
         ["refs", name] => run_refs(name, "."),
         ["refs", name, dir] => run_refs(name, dir),
+        ["format", file] => run_format(PathBuf::from(file)),
         ["mcp"] => match lisplens::mcp::serve() {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {
@@ -124,6 +125,28 @@ fn run_struct_edit(path: PathBuf) -> ExitCode {
     report(lisplens::patch::apply_struct_patch(&path, &patch, dialect))
 }
 
+fn run_format(path: PathBuf) -> ExitCode {
+    if lisplens::dialect_for_path(&path) != lisplens::Dialect::EmacsLisp {
+        eprintln!("lisplens: format currently supports Emacs Lisp (.el) only");
+        return ExitCode::FAILURE;
+    }
+    let source = match std::fs::read_to_string(&path) {
+        Ok(source) => source,
+        Err(err) => {
+            eprintln!("lisplens: {}: {err}", path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let formatted = lisplens::format::format_elisp(&source);
+    if formatted != source {
+        if let Err(err) = lisplens::write::write_atomically(&path, &formatted) {
+            eprintln!("lisplens: {}: {err}", path.display());
+            return ExitCode::FAILURE;
+        }
+    }
+    ExitCode::SUCCESS
+}
+
 fn run_find(name: &str, dir: &str) -> ExitCode {
     match lisplens::search::find_definitions(std::path::Path::new(dir), name) {
         Ok(hits) => {
@@ -158,6 +181,7 @@ fn usage() -> ExitCode {
     eprintln!("  lisplens struct edit <file>   apply a Structural patch from stdin");
     eprintln!("  lisplens find <name> [dir]    find definitions by name (default dir: .)");
     eprintln!("  lisplens refs <name> [dir]    find symbol occurrences (code/data tagged)");
+    eprintln!("  lisplens format <file>        reindent an Emacs Lisp file (native)");
     eprintln!("  lisplens mcp                  run the MCP server over stdio");
     eprintln!();
     eprintln!("Skeleton stage — see CONTEXT.md and docs/adr/ for the full design.");

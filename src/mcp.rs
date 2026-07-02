@@ -79,6 +79,8 @@ fn tools() -> Value {
             json!({ "name": name, "dir": dir }), &["name"]),
         tool("refs", "Find symbol occurrences (code/data tagged)",
             json!({ "name": name, "dir": dir }), &["name"]),
+        tool("format", "Reindent an Emacs Lisp file in place",
+            json!({ "file": file }), &["file"]),
     ])
 }
 
@@ -136,6 +138,19 @@ fn run_tool(name: &str, args: &Value) -> Result<String, String> {
                 apply_struct_patch(Path::new(file), &patch, dialect_for_path(Path::new(file)))
                     .map_err(|e| format!("{e:?}"))?;
             Ok(edit_text(&outcome))
+        }
+        "format" => {
+            let file = arg(args, "file")?;
+            if dialect_for_path(Path::new(file)) != crate::Dialect::EmacsLisp {
+                return Err("format currently supports Emacs Lisp (.el) only".to_string());
+            }
+            let source = read(file)?;
+            let formatted = crate::format::format_elisp(&source);
+            if formatted != source {
+                crate::write::write_atomically(Path::new(file), &formatted)
+                    .map_err(|e| format!("{file}: {e}"))?;
+            }
+            Ok("ok".to_string())
         }
         "find" => {
             let name = arg(args, "name")?;

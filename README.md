@@ -33,6 +33,8 @@ lisplens struct edit <file>          apply a Structural patch from stdin
 lisplens line   edit <file>          apply a Line-hash patch from stdin
 lisplens find <name> [dir]           find definitions by name across a project
 lisplens refs <name> [dir]           find symbol occurrences (code/data tagged)
+lisplens format <file>               reindent an Emacs Lisp file (native indenter)
+lisplens mcp                         run the MCP server over stdio
 ```
 
 ### Reading
@@ -72,8 +74,10 @@ gets one. Agents supply content, not spacing.
 
 ## Status
 
-Working CLI for both modes (read, expand, edit, find, refs). Not yet built: the
-MCP server, the native formatter, and validate-then-write warnings. See
+Working CLI and MCP server for both modes (read, expand, edit, find, refs),
+validate-then-write warnings, and a native Emacs Lisp `format` (byte-exact with
+Emacs on common code; other dialects and touched-region auto-format are future
+work). See
 [`docs/adr/`](docs/adr/) for what's decided and
 [`docs/lispexp-integration.md`](docs/lispexp-integration.md) for how the backend
 is used.
