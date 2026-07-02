@@ -7,6 +7,7 @@
 
 pub mod hash;
 pub mod linehash;
+pub mod write;
 
 use std::path::Path;
 
