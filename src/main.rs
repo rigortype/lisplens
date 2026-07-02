@@ -15,10 +15,7 @@ fn main() -> ExitCode {
         (Some("struct"), Some("read"), Some(file)) => run_struct_read(PathBuf::from(file)),
         (Some("line"), Some("read"), Some(file)) => run_line_read(PathBuf::from(file)),
         (Some("line"), Some("edit"), Some(file)) => run_line_edit(PathBuf::from(file)),
-        (Some("struct"), Some("edit"), _) => {
-            eprintln!("lisplens: `struct edit` is not implemented yet");
-            ExitCode::FAILURE
-        }
+        (Some("struct"), Some("edit"), Some(file)) => run_struct_edit(PathBuf::from(file)),
         _ => usage(),
     }
 }
@@ -55,21 +52,19 @@ fn run_struct_read(path: PathBuf) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn run_line_edit(path: PathBuf) -> ExitCode {
+fn read_stdin() -> Option<String> {
     let mut input = String::new();
-    if let Err(err) = std::io::Read::read_to_string(&mut std::io::stdin(), &mut input) {
-        eprintln!("lisplens: reading patch from stdin: {err}");
-        return ExitCode::FAILURE;
-    }
-    let patch = match lisplens::patch::parse_line_patch(&input) {
-        Ok(patch) => patch,
+    match std::io::Read::read_to_string(&mut std::io::stdin(), &mut input) {
+        Ok(_) => Some(input),
         Err(err) => {
-            eprintln!("lisplens: patch parse error: {err:?}");
-            return ExitCode::FAILURE;
+            eprintln!("lisplens: reading patch from stdin: {err}");
+            None
         }
-    };
-    let options = lisplens::options_for_path(&path);
-    match lisplens::patch::apply_line_patch(&path, &patch, &options) {
+    }
+}
+
+fn report(result: Result<lisplens::patch::Outcome, lisplens::patch::ApplyError>) -> ExitCode {
+    match result {
         Ok(outcome) => {
             println!("ok {}", outcome.new_file_hash);
             ExitCode::SUCCESS
@@ -81,11 +76,42 @@ fn run_line_edit(path: PathBuf) -> ExitCode {
     }
 }
 
+fn run_line_edit(path: PathBuf) -> ExitCode {
+    let Some(input) = read_stdin() else {
+        return ExitCode::FAILURE;
+    };
+    let patch = match lisplens::patch::parse_line_patch(&input) {
+        Ok(patch) => patch,
+        Err(err) => {
+            eprintln!("lisplens: patch parse error: {err:?}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let options = lisplens::options_for_path(&path);
+    report(lisplens::patch::apply_line_patch(&path, &patch, &options))
+}
+
+fn run_struct_edit(path: PathBuf) -> ExitCode {
+    let Some(input) = read_stdin() else {
+        return ExitCode::FAILURE;
+    };
+    let patch = match lisplens::patch::parse_struct_patch(&input) {
+        Ok(patch) => patch,
+        Err(err) => {
+            eprintln!("lisplens: patch parse error: {err:?}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let options = lisplens::options_for_path(&path);
+    report(lisplens::patch::apply_struct_patch(&path, &patch, &options))
+}
+
 fn usage() -> ExitCode {
     eprintln!("usage:");
     eprintln!("  lisplens struct read <file>   structural Outline (line hash kind name)");
     eprintln!("  lisplens line read <file>     line-hash read ([path#hash] + N:hash|content)");
-    eprintln!("  lisplens {{line|struct}} edit    (not implemented yet)");
+    eprintln!("  lisplens line edit <file>     apply a Line-hash patch from stdin");
+    eprintln!("  lisplens struct edit <file>   apply a Structural patch from stdin");
     eprintln!();
     eprintln!("Skeleton stage — see CONTEXT.md and docs/adr/ for the full design.");
     ExitCode::FAILURE

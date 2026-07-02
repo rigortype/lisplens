@@ -83,6 +83,11 @@ pub enum ApplyError {
     LineOutOfRange(u32),
     /// An op's hash did not match the current line content.
     AnchorMismatch { line: u32, expected: String, actual: String },
+    /// No node matched a Structural anchor.
+    AnchorNotFound { line: u32, hash: String },
+    /// An op cannot apply to the resolved node (e.g. raise of a top-level node,
+    /// splice of a non-list).
+    NotApplicable(String),
     /// The edits could not be spliced.
     Splice(SpliceError),
     /// The safe write was refused.
@@ -123,11 +128,11 @@ fn parse_anchor(token: &str) -> Result<Anchor, PatchError> {
 }
 
 /// Parse a Line-hash Patch (ADR-0021).
-pub fn parse_line_patch(input: &str) -> Result<LinePatch, PatchError> {
-    let mut lines = input.lines().peekable();
-
-    // Header: the first non-blank line must be `@ <file-hash>`.
-    let file_hash = loop {
+/// Read the leading `@ <file-hash>` header (skipping blank lines).
+fn parse_header<'a>(
+    lines: &mut std::iter::Peekable<impl Iterator<Item = &'a str>>,
+) -> Result<String, PatchError> {
+    loop {
         match lines.next() {
             None => return Err(PatchError::MissingHeader),
             Some(line) if line.trim().is_empty() => continue,
@@ -137,11 +142,15 @@ pub fn parse_line_patch(input: &str) -> Result<LinePatch, PatchError> {
                     .map(str::trim)
                     .filter(|s| !s.is_empty())
                     .ok_or(PatchError::MissingHeader)?;
-                break rest.to_string();
+                return Ok(rest.to_string());
             }
         }
-    };
+    }
+}
 
+pub fn parse_line_patch(input: &str) -> Result<LinePatch, PatchError> {
+    let mut lines = input.lines().peekable();
+    let file_hash = parse_header(&mut lines)?;
     let mut ops = Vec::new();
     while let Some(line) = lines.next() {
         if line.trim().is_empty() {
@@ -270,6 +279,128 @@ fn full_line_span(source: &str, index: &LineIndex, n: u32) -> std::ops::Range<us
     start..end
 }
 
+// --- Structural patches (ADR-0021) -----------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SVerb {
+    Replace,
+    Delete,
+    Wrap,
+    Raise,
+    Splice,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SOpSpec {
+    verb: SVerb,
+    anchor: Anchor,
+    text: Option<String>,
+}
+
+/// A parsed Structural Patch. Node-context ops (`replace`, `delete`, `wrap`,
+/// `raise`, `splice`) are supported; the sibling-context ops (`slurp` / `barf`
+/// / `split` / `join`) are not yet wired.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StructPatch {
+    /// The snapshot the patch was built against.
+    pub file_hash: String,
+    ops: Vec<SOpSpec>,
+}
+
+/// Parse a Structural Patch (ADR-0021).
+pub fn parse_struct_patch(input: &str) -> Result<StructPatch, PatchError> {
+    let mut lines = input.lines().peekable();
+    let file_hash = parse_header(&mut lines)?;
+    let mut ops = Vec::new();
+    while let Some(line) = lines.next() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let mut tokens = line.split_whitespace();
+        let verb = match tokens.next() {
+            Some("replace") => SVerb::Replace,
+            Some("delete") => SVerb::Delete,
+            Some("wrap") => SVerb::Wrap,
+            Some("raise") => SVerb::Raise,
+            Some("splice") => SVerb::Splice,
+            _ => return Err(PatchError::BadOp(line.to_string())),
+        };
+        let anchor = parse_anchor(tokens.next().ok_or_else(|| PatchError::BadOp(line.to_string()))?)?;
+        let text = if matches!(verb, SVerb::Replace | SVerb::Wrap) {
+            let tag = tokens
+                .next()
+                .and_then(|t| t.strip_prefix("<<"))
+                .filter(|t| !t.is_empty())
+                .ok_or_else(|| PatchError::BadOp(line.to_string()))?
+                .to_string();
+            Some(read_heredoc(&mut lines, &tag)?)
+        } else {
+            None
+        };
+        ops.push(SOpSpec { verb, anchor, text });
+    }
+    Ok(StructPatch { file_hash, ops })
+}
+
+/// Apply a parsed Structural Patch to `path` (ADR-0021, ADR-0023).
+pub fn apply_struct_patch(
+    path: &Path,
+    patch: &StructPatch,
+    options: &Options,
+) -> Result<Outcome, ApplyError> {
+    let source = std::fs::read_to_string(path)?;
+    let actual = file_hash(source.as_bytes());
+    if actual != patch.file_hash {
+        return Err(ApplyError::Drift {
+            expected: patch.file_hash.clone(),
+            actual,
+        });
+    }
+
+    let parsed = lispexp::parse(&source, options);
+    let mut edits = Vec::new();
+    for op in &patch.ops {
+        let located = crate::resolve::resolve(&source, &parsed.data, &op.anchor).ok_or_else(|| {
+            ApplyError::AnchorNotFound {
+                line: op.anchor.line,
+                hash: op.anchor.hash.clone(),
+            }
+        })?;
+        edits.extend(build_struct_edits(&source, op, &located)?);
+    }
+
+    let new_content = splice(&source, edits).map_err(ApplyError::Splice)?;
+    verify_and_write(path, &patch.file_hash, &new_content, options).map_err(ApplyError::Write)?;
+    Ok(Outcome {
+        new_file_hash: file_hash(new_content.as_bytes()),
+    })
+}
+
+fn build_struct_edits(
+    source: &str,
+    op: &SOpSpec,
+    located: &crate::resolve::Located,
+) -> Result<Vec<Edit>, ApplyError> {
+    let node = located.node;
+    let span = node.span.start as usize..node.span.end as usize;
+    Ok(match op.verb {
+        SVerb::Replace => vec![Edit {
+            range: span,
+            text: op.text.clone().unwrap_or_default(),
+        }],
+        SVerb::Delete => vec![Edit { range: span, text: String::new() }],
+        SVerb::Wrap => crate::structural::wrap(node, op.text.as_deref().unwrap_or_default()),
+        SVerb::Raise => {
+            let parent = located
+                .parent
+                .ok_or_else(|| ApplyError::NotApplicable("raise: node has no parent".into()))?;
+            crate::structural::raise(source, parent, node)
+        }
+        SVerb::Splice => crate::structural::splice(source, node)
+            .ok_or_else(|| ApplyError::NotApplicable("splice: node is not a list".into()))?,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,6 +474,60 @@ mod tests {
         assert!(matches!(
             apply_line_patch(&path, &patch, &Options::scheme()),
             Err(ApplyError::Drift { .. })
+        ));
+    }
+
+    fn node_hash(text: &str) -> String {
+        anchor_hash(text.as_bytes())
+    }
+
+    #[test]
+    fn struct_replace_swaps_a_definition_node() {
+        let (_d, path, fh) = temp("(define x 1)\n(define y 2)\n");
+        let h = node_hash("(define y 2)");
+        let patch =
+            parse_struct_patch(&format!("@ {fh}\nreplace 2:{h} <<END\n(define y 22)\nEND\n"))
+                .unwrap();
+        apply_struct_patch(&path, &patch, &Options::scheme()).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "(define x 1)\n(define y 22)\n");
+    }
+
+    #[test]
+    fn struct_wrap_encloses_a_form() {
+        let (_d, path, fh) = temp("body\n");
+        let h = node_hash("body");
+        let patch =
+            parse_struct_patch(&format!("@ {fh}\nwrap 1:{h} <<END\nwhen cond\nEND\n")).unwrap();
+        apply_struct_patch(&path, &patch, &Options::scheme()).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "(when cond body)\n");
+    }
+
+    #[test]
+    fn struct_raise_replaces_the_parent_form() {
+        let (_d, path, fh) = temp("(when cond (do-thing))\n");
+        let h = node_hash("(do-thing)");
+        let patch = parse_struct_patch(&format!("@ {fh}\nraise 1:{h}\n")).unwrap();
+        apply_struct_patch(&path, &patch, &Options::scheme()).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "(do-thing)\n");
+    }
+
+    #[test]
+    fn struct_splice_removes_inner_delimiters() {
+        let (_d, path, fh) = temp("(foo (bar baz) quux)\n");
+        let h = node_hash("(bar baz)");
+        let patch = parse_struct_patch(&format!("@ {fh}\nsplice 1:{h}\n")).unwrap();
+        apply_struct_patch(&path, &patch, &Options::scheme()).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "(foo bar baz quux)\n");
+    }
+
+    #[test]
+    fn struct_raise_of_a_top_level_node_is_refused() {
+        let (_d, path, fh) = temp("(define x 1)\n");
+        let h = node_hash("(define x 1)");
+        let patch = parse_struct_patch(&format!("@ {fh}\nraise 1:{h}\n")).unwrap();
+        assert!(matches!(
+            apply_struct_patch(&path, &patch, &Options::scheme()),
+            Err(ApplyError::NotApplicable(_))
         ));
     }
 }

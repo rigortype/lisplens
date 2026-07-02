@@ -10,6 +10,7 @@ pub mod edit;
 pub mod hash;
 pub mod linehash;
 pub mod patch;
+pub mod resolve;
 pub mod structural;
 pub mod write;
 
