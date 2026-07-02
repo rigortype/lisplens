@@ -1,9 +1,9 @@
 //! lisplens — token-efficient, polyglot Lisp editing for AI agents.
 //!
-//! Skeleton stage: this crate currently exposes a minimal [`outline`] over the
-//! [`lispexp`] reader. The full design — Structural / Line-hash modes, Batch
-//! edits, drift detection, the pluggable formatter — lives in `CONTEXT.md` and
-//! `docs/adr/`.
+//! Current surface: a structural [`outline`] and a Line-hash [`linehash::read`]
+//! over the [`lispexp`] reader, plus the safe-write machinery in [`write`]. The
+//! full design — Structural / Line-hash modes, Batch edits, drift detection,
+//! the pluggable formatter — lives in `CONTEXT.md` and `docs/adr/`.
 
 pub mod hash;
 pub mod linehash;
@@ -11,85 +11,85 @@ pub mod write;
 
 use std::path::Path;
 
-use lispexp::{parse, Datum, DatumKind, Options};
+use lispexp::annotate::{annotate_tree, bundled_registry, Role};
+use lispexp::{parse, Datum, DatumKind, Dialect, Options};
 
-/// One entry in a file's [`outline`]: a top-level definition's start line, its
-/// defining head (e.g. `defun`, `define`), and the name it introduces.
-///
-/// A first, heuristic slice of the Outline from ADR-0013 — it keys off the head
-/// symbol and does not yet use lispexp's `annotate` form roles or carry a hash.
+use crate::hash::anchor_hash;
+
+/// One entry in a file's [`outline`]: a definition's start line, a short
+/// content hash of its whole form (its anchor — ADR-0008), its defining head
+/// (the verbatim *kind*, e.g. `defun`), and the name it introduces.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutlineEntry {
     /// 1-based start line of the definition.
     pub line: u32,
-    /// The defining head symbol, e.g. `define` or `defun`.
+    /// 4-hex anchor hash over the form's verbatim span bytes.
+    pub hash: String,
+    /// The defining head symbol, verbatim (e.g. `define`, `cl-defun`).
     pub kind: String,
     /// The defined name, when one can be extracted.
     pub name: Option<String>,
 }
 
-/// Parse `source` and return a heuristic Outline of its top-level definitions.
-pub fn outline(source: &str, options: &Options) -> Vec<OutlineEntry> {
-    parse(source, options)
-        .data
+/// Produce a structural Outline (ADR-0013) of `source`'s definitions for
+/// `dialect`, using lispexp's polyglot definition registry — no bespoke
+/// heuristic. Definitions are listed in source order (outer before nested);
+/// nesting is not yet shown by indentation. Each entry carries a 4-hex anchor
+/// hash (ADR-0008) over the form's verbatim span.
+pub fn outline(source: &str, dialect: Dialect) -> Vec<OutlineEntry> {
+    let parsed = parse(source, &Options::for_dialect(dialect));
+    let registry = bundled_registry(dialect);
+    annotate_tree(&parsed.data, &registry)
         .iter()
-        .filter_map(outline_entry)
+        .map(|form| OutlineEntry {
+            line: form.form.line,
+            hash: anchor_hash(span_bytes(source, form.form)),
+            kind: form.head.to_string(),
+            name: form.first(Role::Name).and_then(name_text),
+        })
         .collect()
 }
 
-fn outline_entry(datum: &Datum) -> Option<OutlineEntry> {
-    let DatumKind::List { items, .. } = &datum.kind else {
-        return None;
-    };
-    let head = symbol_text(items.first()?)?;
-    // Heuristic first pass: treat `def*` / `define*` heads as definitions.
-    if !head.starts_with("def") {
-        return None;
-    }
-    Some(OutlineEntry {
-        line: datum.line,
-        kind: head.to_string(),
-        name: items.get(1).and_then(defined_name),
-    })
+/// The verbatim source bytes of `datum`'s span.
+fn span_bytes<'a>(source: &'a str, datum: &Datum) -> &'a [u8] {
+    &source.as_bytes()[datum.span.start as usize..datum.span.end as usize]
 }
 
-/// The name a definition introduces: `(defvar x …)` → `x`;
-/// `(define (square n) …)` → `square`.
-fn defined_name(datum: &Datum) -> Option<String> {
+/// A definition's name as text: a bare name symbol (`(define pi …)` → `pi`), or
+/// the head of a `(name args…)` definition target (`(define (square x) …)` →
+/// `square`).
+fn name_text(datum: &Datum) -> Option<String> {
     match &datum.kind {
         DatumKind::Symbol(s) => Some((*s).to_string()),
-        DatumKind::List { items, .. } => symbol_text(items.first()?).map(str::to_string),
-        _ => None,
-    }
-}
-
-fn symbol_text<'a>(datum: &Datum<'a>) -> Option<&'a str> {
-    match &datum.kind {
-        DatumKind::Symbol(s) => Some(*s),
+        DatumKind::List { items, .. } => match &items.first()?.kind {
+            DatumKind::Symbol(s) => Some((*s).to_string()),
+            _ => None,
+        },
         _ => None,
     }
 }
 
 /// Zero-config dialect guess from a file extension (ADR-0004, first pass).
 /// Unknown extensions fall back to a permissive Scheme superset.
-pub fn options_for_path(path: &Path) -> Options {
+pub fn dialect_for_path(path: &Path) -> Dialect {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or_default()
         .to_ascii_lowercase();
     match ext.as_str() {
-        "scm" | "ss" | "sls" | "sps" | "sld" => Options::scheme(),
-        "el" => Options::emacs_lisp(),
-        "clj" | "cljs" | "cljc" | "edn" => Options::clojure(),
-        "lisp" | "lsp" | "cl" | "asd" => Options::common_lisp(),
-        "rkt" => Options::racket(),
-        "fnl" => Options::fennel(),
-        "janet" => Options::janet(),
-        "hy" => Options::hy(),
-        "lfe" => Options::lfe(),
-        "phel" => Options::phel(),
-        _ => Options::scheme_superset(),
+        "scm" | "ss" | "sls" | "sps" | "sld" => Dialect::Scheme,
+        "el" => Dialect::EmacsLisp,
+        "clj" | "cljs" | "cljc" => Dialect::Clojure,
+        "edn" => Dialect::Edn,
+        "lisp" | "lsp" | "cl" | "asd" => Dialect::CommonLisp,
+        "rkt" => Dialect::Racket,
+        "fnl" => Dialect::Fennel,
+        "janet" => Dialect::Janet,
+        "hy" => Dialect::Hy,
+        "lfe" => Dialect::Lfe,
+        "phel" => Dialect::Phel,
+        _ => Dialect::SchemeSuperset,
     }
 }
 
@@ -98,13 +98,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn outlines_scheme_and_elisp_definitions() {
-        let src = "(define (square x) (* x x))\n(defvar answer 42)\n(+ 1 2)\n";
-        let entries = outline(src, &Options::scheme());
-        assert_eq!(entries.len(), 2);
+    fn outlines_definitions_with_kind_name_and_hash() {
+        let src = "(define (square x) (* x x))\n(define pi 3.14)\n(+ 1 2)\n";
+        let entries = outline(src, Dialect::Scheme);
+
+        assert_eq!(entries.len(), 2, "the bare call (+ 1 2) is not a definition");
         assert_eq!(entries[0].kind, "define");
         assert_eq!(entries[0].name.as_deref(), Some("square"));
-        assert_eq!(entries[1].kind, "defvar");
-        assert_eq!(entries[1].name.as_deref(), Some("answer"));
+        assert_eq!(entries[0].line, 1);
+        assert_eq!(entries[0].hash.len(), 4);
+        assert_eq!(entries[1].name.as_deref(), Some("pi"));
+    }
+
+    #[test]
+    fn recognizes_prefixed_emacs_definitions_the_old_heuristic_missed() {
+        // `cl-defun` / `ert-deftest` don't start with "def" — the previous
+        // starts_with("def") heuristic dropped them; the registry catches them.
+        let src = "(cl-defun foo () 1)\n(ert-deftest bar () (should t))\n";
+        let kinds: Vec<String> = outline(src, Dialect::EmacsLisp)
+            .into_iter()
+            .map(|e| e.kind)
+            .collect();
+
+        assert!(kinds.iter().any(|k| k == "cl-defun"), "{kinds:?}");
+        assert!(kinds.iter().any(|k| k == "ert-deftest"), "{kinds:?}");
+    }
+
+    #[test]
+    fn does_not_mistake_an_ordinary_call_for_a_definition() {
+        // `(defrobulate …)` looks defn-ish to a prefix heuristic but is not a
+        // known definition form — the registry does not match it.
+        let entries = outline("(defrobulate x)\n", Dialect::Scheme);
+        assert!(entries.is_empty(), "{entries:?}");
     }
 }

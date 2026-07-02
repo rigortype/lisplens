@@ -41,10 +41,11 @@ fn run_outline(path: PathBuf) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let options = lisplens::options_for_path(&path);
-    for entry in lisplens::outline(&source, &options) {
+    let dialect = lisplens::dialect_for_path(&path);
+    for entry in lisplens::outline(&source, dialect) {
         let name = entry.name.as_deref().unwrap_or("-");
-        println!("{:>5}  {}  {}", entry.line, entry.kind, name);
+        // ADR-0013 Outline columns: line, hash, kind, name (name last).
+        println!("{:>5}  {}  {}  {}", entry.line, entry.hash, entry.kind, name);
     }
     ExitCode::SUCCESS
 }
