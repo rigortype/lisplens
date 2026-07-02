@@ -1,7 +1,7 @@
 //! lisplens — token-efficient, polyglot Lisp editing for AI agents.
 //!
 //! Current surface: a structural [`outline`] and a Line-hash [`linehash::read`]
-//! over the [`lispexp`] reader, plus the safe-write machinery in [`write`]. The
+//! over the [`lispexp`] reader, plus the safe-write machinery in [`mod@write`]. The
 //! full design — Structural / Line-hash modes, Batch edits, drift detection,
 //! the pluggable formatter — lives in `CONTEXT.md` and `docs/adr/`.
 

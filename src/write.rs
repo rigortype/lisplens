@@ -49,7 +49,7 @@ impl From<std::io::Error> for WriteError {
 /// Verify no drift, verify the edit introduces no new parse errors, then write
 /// `new_content` to `path` atomically.
 ///
-/// `expected_file_hash` is the [`file_hash`](crate::hash::file_hash) the edit
+/// `expected_file_hash` is the [`file_hash`] the edit
 /// was based on; a mismatch is [`WriteError::Drift`] (strict, file-level —
 /// ADR-0017; per-anchor relaxed acceptance is a future opt-in). `options`
 /// selects the dialect for the parse-error baseline.

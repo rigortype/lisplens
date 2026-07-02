@@ -10,6 +10,8 @@ repository = "https://github.com/rigortype/lisplens"
 authors = ["USAMI Kenta <tadsan@zonu.me>"]
 keywords = ["lisp", "s-expression", "editing", "mcp", "agent"]
 categories = ["command-line-utilities", "development-tools"]
+# Keep the published crate to code + user docs; agent/CI tooling isn't shipped.
+exclude = ["/.github", "/.claude", "/AGENTS.md", "/CLAUDE.md", "/docs/notes", "/docs/lispexp-feedback"]
 
 [dependencies]
 lispexp = "0.5"

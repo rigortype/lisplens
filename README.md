@@ -1,7 +1,7 @@
 # lisplens
 
-Token-efficient, polyglot Lisp editing for AI agents — a CLI (and, later, MCP)
-tool built on the [lispexp](https://crates.io/crates/lispexp) reader.
+Token-efficient, polyglot Lisp editing for AI agents — a CLI and MCP tool built
+on the [lispexp](https://crates.io/crates/lispexp) reader.
 
 lisplens lets an agent **read a file's shape cheaply**, get a stable **anchor**
 for any target, and **edit by anchor** without resending the whole file. Every
@@ -22,6 +22,17 @@ The design is recorded in [`CONTEXT.md`](CONTEXT.md) (domain glossary) and
 
 Both anchor on a short content hash: a read emits the hash, an edit hands it
 back, and a mismatched or drifted file is refused (you re-read).
+
+## Install
+
+```sh
+cargo install lisplens          # from crates.io — puts `lisplens` on your PATH
+```
+
+Or download a pre-built binary for your platform from the
+[latest release](https://github.com/rigortype/lisplens/releases/latest).
+
+As an MCP server, point your client at the `lisplens mcp` command.
 
 ## CLI
 
@@ -68,8 +79,8 @@ ok 9f3c1a2b4d5e6f70    # the new file-hash
 
 Structural ops: `replace`, `delete`, `wrap`, `raise`, `splice`, `slurp-fwd`,
 `slurp-back`, `barf-fwd`, `barf-back`, `split @<index>`, `join <anchor2>`,
-`rename <from> <to>`. Line-hash ops: `replace`, `delete`, `insert-after`,
-`insert-before`.
+`rename <from> <to>`, `format` (reindent the anchored form in place). Line-hash
+ops: `replace`, `delete`, `insert-after`, `insert-before`.
 
 lisplens owns whitespace: a `replace` keeps a line's terminator; an `insert`
 gets one. Agents supply content, not spacing.
@@ -77,12 +88,12 @@ gets one. Agents supply content, not spacing.
 ## Status
 
 Working CLI and MCP server for both modes (read, expand, edit, find, refs),
-validate-then-write warnings, and a native Emacs Lisp `format` (byte-exact with
-Emacs on common code; other dialects and touched-region auto-format are future
-work). See
-[`docs/adr/`](docs/adr/) for what's decided and
-[`docs/lispexp-integration.md`](docs/lispexp-integration.md) for how the backend
-is used.
+validate-then-write warnings, and a native Emacs Lisp `format` — byte-exact with
+Emacs on common code, with optional [Nameless](https://github.com/Malabarba/Nameless)
+awareness, and touched-region auto-format on Structural edits. Formatters for
+other dialects are future work. See [`docs/adr/`](docs/adr/) for what's decided
+and [`docs/lispexp-integration.md`](docs/lispexp-integration.md) for how the
+backend is used.
 
 ## License
 
