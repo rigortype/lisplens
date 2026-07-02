@@ -158,6 +158,39 @@ pub fn join(first: &Datum, second: &Datum) -> Option<Vec<Edit>> {
     ])
 }
 
+/// Rename every occurrence of the symbol `from` to `to` within `node`'s subtree
+/// — occurrence-based, **not** scope-aware (ADR-0003). Renames in both code and
+/// quoted data within the subtree; it does not resolve bindings or shadowing.
+pub fn rename(node: &Datum, from: &str, to: &str) -> Vec<Edit> {
+    let mut edits = Vec::new();
+    rename_walk(node, from, to, &mut edits);
+    edits
+}
+
+fn rename_walk(datum: &Datum, from: &str, to: &str, edits: &mut Vec<Edit>) {
+    match &datum.kind {
+        DatumKind::Symbol(s) if *s == from => edits.push(Edit {
+            range: datum.span.start as usize..datum.span.end as usize,
+            text: to.to_string(),
+        }),
+        DatumKind::List { items, tail, .. } => {
+            for item in items {
+                rename_walk(item, from, to, edits);
+            }
+            if let Some(tail) = tail {
+                rename_walk(tail, from, to, edits);
+            }
+        }
+        DatumKind::Prefixed { inner, arg, .. } => {
+            rename_walk(inner, from, to, edits);
+            if let Some(arg) = arg {
+                rename_walk(arg, from, to, edits);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// The list's delimiter and its children, or `None` for a non-list.
 fn as_list<'a, 't>(node: &'a Datum<'t>) -> Option<(&'a Delim, &'a [Datum<'t>])> {
     match &node.kind {
@@ -290,6 +323,14 @@ mod tests {
         let src = "(hello world)";
         let p = parse(src, &Options::scheme());
         assert_eq!(apply(src, split(top(&p), 0).unwrap()).unwrap(), "(hello) (world)");
+    }
+
+    #[test]
+    fn rename_replaces_occurrences_in_the_subtree() {
+        let src = "(let ((x 1)) (+ x x))";
+        let p = parse(src, &Options::scheme());
+        let edits = rename(top(&p), "x", "y");
+        assert_eq!(apply(src, edits).unwrap(), "(let ((y 1)) (+ y y))");
     }
 
     #[test]

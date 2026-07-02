@@ -294,6 +294,7 @@ enum SVerb {
     BarfBack,
     Split,
     Join,
+    Rename,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -305,11 +306,13 @@ struct SOpSpec {
     index: Option<usize>,
     /// The second list for `join`.
     anchor2: Option<Anchor>,
+    /// `(from, to)` symbols for `rename`.
+    rename: Option<(String, String)>,
 }
 
 /// A parsed Structural Patch, covering the full op set (ADR-0012, ADR-0021):
 /// `replace`, `delete`, `wrap`, `raise`, `splice`, `slurp-fwd`, `slurp-back`,
-/// `barf-fwd`, `barf-back`, `split`, `join`.
+/// `barf-fwd`, `barf-back`, `split`, `join`, `rename`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StructPatch {
     /// The snapshot the patch was built against.
@@ -339,6 +342,7 @@ pub fn parse_struct_patch(input: &str) -> Result<StructPatch, PatchError> {
             Some("barf-back") => SVerb::BarfBack,
             Some("split") => SVerb::Split,
             Some("join") => SVerb::Join,
+            Some("rename") => SVerb::Rename,
             _ => return Err(PatchError::BadOp(line.to_string())),
         };
         let bad = || PatchError::BadOp(line.to_string());
@@ -347,6 +351,7 @@ pub fn parse_struct_patch(input: &str) -> Result<StructPatch, PatchError> {
         let mut text = None;
         let mut index = None;
         let mut anchor2 = None;
+        let mut rename = None;
         match verb {
             SVerb::Replace | SVerb::Wrap => {
                 let tag = tokens
@@ -366,9 +371,14 @@ pub fn parse_struct_patch(input: &str) -> Result<StructPatch, PatchError> {
                 index = Some(n);
             }
             SVerb::Join => anchor2 = Some(parse_anchor(tokens.next().ok_or_else(bad)?)?),
+            SVerb::Rename => {
+                let from = tokens.next().ok_or_else(bad)?.to_string();
+                let to = tokens.next().ok_or_else(bad)?.to_string();
+                rename = Some((from, to));
+            }
             _ => {}
         }
-        ops.push(SOpSpec { verb, anchor, text, index, anchor2 });
+        ops.push(SOpSpec { verb, anchor, text, index, anchor2, rename });
     }
     Ok(StructPatch { file_hash, ops })
 }
@@ -453,6 +463,10 @@ fn build_struct_edits(
                 ApplyError::AnchorNotFound { line: a2.line, hash: a2.hash.clone() }
             })?;
             st::join(node, second.node).ok_or_else(|| na("join: both must be lists"))?
+        }
+        SVerb::Rename => {
+            let (from, to) = op.rename.as_ref().ok_or_else(|| na("rename: missing from/to"))?;
+            st::rename(node, from, to)
         }
     })
 }
@@ -639,6 +653,19 @@ mod tests {
         let patch = parse_struct_patch(&format!("@ {fh}\njoin 1:{h1} 1:{h2}\n")).unwrap();
         apply_struct_patch(&path, &patch, &Options::scheme()).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "(a b)\n");
+    }
+
+    #[test]
+    fn struct_rename_replaces_occurrences_in_the_anchored_subtree() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.scm");
+        let src = "(define (f x) (+ x x))\n";
+        std::fs::write(&path, src).unwrap();
+        let fh = file_hash(src.as_bytes());
+        let h = node_hash("(define (f x) (+ x x))");
+        let patch = parse_struct_patch(&format!("@ {fh}\nrename 1:{h} x y\n")).unwrap();
+        apply_struct_patch(&path, &patch, &Options::scheme()).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "(define (f y) (+ y y))\n");
     }
 
     #[test]
