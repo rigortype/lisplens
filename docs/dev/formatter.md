@@ -32,7 +32,10 @@ indent spec:
 
 A dotted-tail sublist — `(a . (b c))`, which Emacs reads as `(a b c)` — opens its
 own containing sexp; `container_at` descends into the tail so its elements indent
-against it. A `;;;` comment line is never reindented (Emacs leaves it in place),
+against it. For a lone-car dotted pair (`'(eval . FORM)`) Emacs instead treats
+the `.` itself as the first argument, so the tail's continuation aligns under the
+dot — reached via lispexp's `Datum::dot_span` (0.5). A `;;;` comment line is never
+reindented (Emacs leaves it in place),
 matching the multi-line-string rule. Reindentation only rewrites leading
 whitespace, so it can never change what the file parses to (it is always safe).
 

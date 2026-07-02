@@ -264,6 +264,14 @@ fn normal_indent(cols: &Cols, c: &Datum, items: &[Datum], open_col: usize, offse
         if cols.line_of(c.span.start as usize) == cols.line_of(second.span.start as usize) {
             return cols.col(second.span.start as usize);
         }
+    } else if let Some(dot) = c.dot_span() {
+        // A dotted pair with a lone car — `(a . tail)` — where Emacs's
+        // text-based indenter treats the `.` as the first argument: a tail
+        // continuation aligns under the `.` when it sits on the open line.
+        // (`'(eval . FORM)`, the font-lock-keywords idiom.)
+        if cols.line_of(dot.start as usize) == cols.line_of(c.span.start as usize) {
+            return cols.col(dot.start as usize);
+        }
     }
     // Otherwise align under the head.
     cols.col(first.span.start as usize)
@@ -596,6 +604,30 @@ kw))
 (defun g ()
   `(,head first
           ,(compute)))
+";
+        assert_eq!(format_elisp(input, &FormatConfig::default()), expected);
+    }
+
+    /// A dotted pair with a lone car (`'(eval . FORM)`, the font-lock idiom)
+    /// aligns the tail's continuation under the `.` — Emacs treats the lone dot
+    /// as the first argument. Needs lispexp's `dot_span`. Golden from Emacs.
+    #[test]
+    fn matches_emacs_on_dotted_pair_tail() {
+        let input = "\
+(defvar kw
+(list
+'(eval .
+;; comment under the dot
+(list a
+b))))
+";
+        let expected = "\
+(defvar kw
+  (list
+   '(eval .
+          ;; comment under the dot
+          (list a
+                b))))
 ";
         assert_eq!(format_elisp(input, &FormatConfig::default()), expected);
     }

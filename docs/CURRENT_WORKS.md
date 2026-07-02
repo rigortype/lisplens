@@ -6,7 +6,9 @@ in the dev docs** (see `AGENTS.md` → Codebase): `docs/dev/architecture.md`,
 
 ## Now
 
-- 86 tests pass, `cargo clippy --all-targets` clean; tree clean. 30 ADRs.
+- 87 tests pass, `cargo clippy --all-targets` clean; tree clean. 30 ADRs.
+- On **lispexp 0.5** (`dot_span` for improper-list dots — our upstream ask,
+  shipped).
 - **First-release goal: a faithful Emacs Lisp formatter.**
 - **Long-tail closed** (all verified byte-exact vs Emacs, 0 regressions across
   emacs `lisp/` + magit/lem sweeps): data lists vs function calls
@@ -27,11 +29,10 @@ in the dev docs** (see `AGENTS.md` → Codebase): `docs/dev/architecture.md`,
 ## Next steps (priority order)
 
 1. **Remaining true long tail (niche)** — nested specforms (long `if-let`
-   condition; Emacs's `(COLUMN . start)` return semantics); the dotted-pair
-   `.`-alignment quirk where Emacs treats a lone `.` as an alignable token
-   (`'(eval . FORM)` in font-lock keywords — dired.el), which even real code
-   doesn't follow consistently; and package-local macros absent from the
-   bundled/harvested specs. To measure real fidelity, compare against the
+   condition; Emacs's `(COLUMN . start)` return semantics), and package-local
+   macros absent from the bundled/harvested specs. The dotted-pair `.`-alignment
+   quirk (`'(eval . FORM)`) is now handled via lispexp 0.5's `dot_span`
+   (dired.el 53→35 harness diffs). To measure real fidelity, compare against the
    original file, not batch Emacs (which lacks the file's own indent specs).
 2. **Wire touched-region auto-format on Structural edit** (ADR-0025/0028) —
    `format_elisp` is whole-file; add a block-range reindent and call it from
