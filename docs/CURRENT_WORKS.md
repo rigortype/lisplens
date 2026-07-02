@@ -1,12 +1,19 @@
 # lisplens — status snapshot
 
-Ephemeral snapshot for continuing toward first release. **Durable knowledge is
-in the dev docs** (see `AGENTS.md` → Codebase): `docs/dev/architecture.md`,
-`docs/dev/formatter.md`, `CONTEXT.md`, `docs/adr/`.
+Ephemeral snapshot. **Durable knowledge is in the dev docs** (see `AGENTS.md` →
+Codebase): `docs/dev/architecture.md`, `docs/dev/formatter.md`, `CONTEXT.md`,
+`docs/adr/`.
 
 ## Now
 
-- 97 tests pass, `cargo clippy --all-targets` clean; tree clean. 30 ADRs.
+- **Released 0.1.0** (2026-07-03) — on [crates.io](https://crates.io/crates/lisplens)
+  (`cargo install lisplens`) and as pre-built binaries on the GitHub Release for
+  x86_64/aarch64 Linux + macOS and x86_64 Windows. Tag `vX.Y.Z` → GitHub Actions
+  publishes (`.github/workflows/release.yml`); next bump via the
+  `lisplens-release-prep` skill. No pinned MSRV (binary tool; deps track recent
+  stable Rust).
+- 97 tests pass, `cargo fmt --check` / `cargo clippy --all-targets` clean; tree
+  clean. 30 ADRs.
 - **Touched-region auto-format on Structural edit (ADR-0025/0028) is wired**:
   `apply_struct_patch` reindents the top-level forms an edit fell within
   (`format::reindent_range` + `edit::splice_tracked`), Emacs Lisp only, others
