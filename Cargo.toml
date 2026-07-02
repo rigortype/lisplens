@@ -12,7 +12,7 @@ keywords = ["lisp", "s-expression", "editing", "mcp", "agent"]
 categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
-lispexp = "0.2"
+lispexp = "0.5"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 tempfile = "3"
 serde_json = "1"
