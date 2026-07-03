@@ -143,6 +143,41 @@ not Claude-specific tricks.
    framed as a large-file/many-form secondary benefit. See the SKILL.md diff
    across iterations in the workspace.
 
+## Follow-up: the skill *undertriggers*, and pushier wording doesn't fix it
+
+Ran the description-trigger optimizer (skill-creator's `run_loop.py`, model
+`claude-opus-4-8`, 5 iterations) over 20 realistic queries — 10 that should invoke
+the skill, 10 near-miss negatives (Rust rename, `deps.edn` resolution, sed on a
+log, JSON/YAML formatting, "explain a CL reader macro", etc.).
+
+Result: **recall was 0% on every iteration.** Not one should-trigger query
+invoked the skill; every should-not-trigger query correctly abstained
+(precision 100%). The numbers were *flat* across five very different
+descriptions — including one the optimizer pushed all the way to "Use this skill
+for EVERY edit to a file whose path ends in .el …, no matter how ordinary the
+change looks." It scored no better, so the optimizer kept the original
+safety-first description as best (test 4/8 = exactly the 4 test negatives).
+
+Two things are going on, and both matter:
+
+1. **Structural undertriggering — the same root cause as the tie above.** The
+   host only consults a skill for work the model judges it can't already do.
+   Claude is confident it can edit Lisp with plain Edit/grep (the benchmark
+   proved it *can*), so it never reaches for the skill — and no amount of pushy
+   description wording overrides that judgment.
+2. **The offline trigger harness under-measures.** `run_loop.py` fires one-shot
+   `claude -p` prompts against file paths that don't exist on disk; with nothing
+   to act on, the model tends to answer conversationally and never gets to a tool
+   call. So 0% is a floor, not necessarily the real in-session rate.
+
+**Decision:** keep the current description (it was the optimizer's own pick) and
+**do not chase triggering.** Practical guidance: this skill is most reliable when
+*explicitly* invoked ("use lisplens to …" / `/lisplens`), not relied on to
+auto-fire. That's an acceptable fit — the payoff (parse-safety, symbol-exact
+rename/refs) is worth a deliberate reach, and the failure mode of *not* triggering
+is just "Claude edits it the ordinary way," which the benchmark showed is usually
+fine anyway.
+
 ## Caveats
 
 - 1 run per (eval, config) — directional signal, not tight statistics. Timing/token
