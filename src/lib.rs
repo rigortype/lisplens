@@ -14,6 +14,7 @@ pub mod linehash;
 pub mod mcp;
 pub mod nameless;
 pub mod patch;
+pub mod refactor;
 pub mod resolve;
 pub mod search;
 pub mod structural;

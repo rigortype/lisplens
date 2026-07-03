@@ -6,15 +6,24 @@ Codebase): `docs/dev/architecture.md`, `docs/dev/formatter.md`, `CONTEXT.md`,
 
 ## Now
 
+- **`rename` command landed** (ADR-0032): `lisplens rename <old> <new> <file>`
+  (+ MCP `rename`) renames a symbol across a file — **symbol-exact in code and
+  data**, never substrings/keywords/strings/comments, so sibling symbols survive
+  by construction (no `(?!-)` lookahead). Collapses the benchmark's proven idiom
+  (`refs → line edit batch → refs`) into one call: splice → reindent the touched
+  top-level forms (native engines) → validate-then-write, reporting the site
+  count + new file hash; a missing `from` is an error, not a silent no-op.
+  Verified on the benchmark's own trap (`c-macro-cache` renamed, `-get`/`-start-pos`
+  siblings untouched). New `src/refactor.rs` (the home for ADR-0032 procedures).
+  113 tests. **Next: `inline`, then `extract`.**
 - **`check` command landed** (ADR-0032, first of the refactoring procedures): a
   standalone parse-check — `lisplens check <file>` (+ MCP `check`) parses by
   dialect and reports `path:line: message` diagnostics, silent + exit 0 when
   clean, non-zero on parse errors. Surfaces the guarantee lisplens already
   enforces on every edit (validate-then-write, ADR-0005) so agents/CI need not
   shell out to `emacs -Q --batch check-parens` (the benchmark baseline did,
-  repeatedly). `check`/`diagnostics_text` in `lib.rs`; 109 tests. On branch
-  `feat/refactoring-procedures`. **Next in ADR-0032: `rename`, then `inline` /
-  `extract`.**
+  repeatedly). `check`/`diagnostics_text` in `lib.rs`. On branch
+  `feat/refactoring-procedures`.
 
 - **Polyglot native formatter — every Emacs-bundled Lisp indenter now has an
   engine** (ADR-0031, 2026-07-04). The formatter dispatches by dialect over one

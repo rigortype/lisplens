@@ -69,6 +69,8 @@ fn tools() -> Value {
     let file = json!({ "type": "string", "description": "path to the file" });
     let patch = json!({ "type": "string", "description": "a patch (stdin DSL) to apply" });
     let name = json!({ "type": "string" });
+    let from = json!({ "type": "string", "description": "the symbol to rename" });
+    let to = json!({ "type": "string", "description": "the new symbol name" });
     let dir = json!({ "type": "string", "description": "directory to search (default: .)" });
     json!([
         tool(
@@ -118,6 +120,12 @@ fn tools() -> Value {
             "Parse-check a Lisp file; report diagnostics (empty = clean)",
             json!({ "file": file }),
             &["file"]
+        ),
+        tool(
+            "rename",
+            "Rename a symbol across a file (symbol-exact, safe)",
+            json!({ "file": file, "from": from, "to": to }),
+            &["file", "from", "to"]
         ),
     ])
 }
@@ -201,6 +209,18 @@ fn run_tool(name: &str, args: &Value) -> Result<String, String> {
             } else {
                 crate::diagnostics_text(file, &diagnostics)
             })
+        }
+        "rename" => {
+            let file = arg(args, "file")?;
+            let from = arg(args, "from")?;
+            let to = arg(args, "to")?;
+            let dialect = dialect_for_path(Path::new(file));
+            let outcome = crate::refactor::rename_symbol_in_file(Path::new(file), from, to, dialect)
+                .map_err(|e| e.to_string())?;
+            Ok(format!(
+                "renamed {} occurrence(s): {from} -> {to}  {}",
+                outcome.renamed, outcome.new_file_hash
+            ))
         }
         "find" => {
             let name = arg(args, "name")?;
