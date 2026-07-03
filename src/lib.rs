@@ -14,6 +14,7 @@ pub mod linehash;
 pub mod mcp;
 pub mod nameless;
 pub mod patch;
+pub mod refactor;
 pub mod resolve;
 pub mod search;
 pub mod structural;
@@ -250,6 +251,42 @@ fn name_text(datum: &Datum) -> Option<String> {
     }
 }
 
+/// A parse diagnostic surfaced by [`check`]: a 1-based line and a message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Diagnostic {
+    /// 1-based line the diagnostic points at.
+    pub line: u32,
+    /// Human-readable message (lispexp's `ErrorKind` display).
+    pub message: String,
+}
+
+/// Parse `source` as `dialect` and return its parse diagnostics — empty when the
+/// file reads cleanly. This is the standalone parse check (ADR-0032): the
+/// guarantee lisplens already enforces on every edit (validate-then-write,
+/// ADR-0005), exposed on its own so agents and CI need not shell out to
+/// `emacs -Q --batch check-parens`.
+#[must_use]
+pub fn check(source: &str, dialect: Dialect) -> Vec<Diagnostic> {
+    parse(source, &Options::for_dialect(dialect))
+        .errors
+        .iter()
+        .map(|e| Diagnostic {
+            line: e.line,
+            message: e.kind.to_string(),
+        })
+        .collect()
+}
+
+/// Render [`check`] diagnostics as `path:line: message` lines (one per
+/// diagnostic), for the CLI/MCP `check` surface. Empty input renders empty.
+#[must_use]
+pub fn diagnostics_text(path: &str, diagnostics: &[Diagnostic]) -> String {
+    diagnostics
+        .iter()
+        .map(|d| format!("{path}:{}: {}\n", d.line, d.message))
+        .collect()
+}
+
 /// The lispexp [`Options`] for a path's guessed dialect ([`dialect_for_path`]).
 pub fn options_for_path(path: &Path) -> Options {
     Options::for_dialect(dialect_for_path(path))
@@ -288,6 +325,23 @@ pub fn recognized_dialect(path: &Path) -> Option<Dialect> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn check_passes_clean_and_reports_parse_errors() {
+        // A well-formed file has no diagnostics, in any dialect.
+        assert!(check("(defun f (x)\n  (+ x 1))\n", Dialect::EmacsLisp).is_empty());
+        assert!(check("(define (f x) (+ x 1))\n", Dialect::Scheme).is_empty());
+        // An unclosed list is reported, at its opening line, and renders as
+        // `path:line: message`.
+        let diagnostics = check("(defun f (x\n  (+ x 1)\n", Dialect::EmacsLisp);
+        assert!(!diagnostics.is_empty());
+        assert_eq!(diagnostics[0].line, 1);
+        let text = diagnostics_text("f.el", &diagnostics);
+        assert!(text.starts_with("f.el:1: "), "{text:?}");
+        assert!(text.ends_with('\n'));
+        // Clean input renders to empty text.
+        assert!(diagnostics_text("f.el", &[]).is_empty());
+    }
 
     #[test]
     fn outlines_definitions_with_kind_name_and_hash() {

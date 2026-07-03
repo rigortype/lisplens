@@ -69,6 +69,8 @@ fn tools() -> Value {
     let file = json!({ "type": "string", "description": "path to the file" });
     let patch = json!({ "type": "string", "description": "a patch (stdin DSL) to apply" });
     let name = json!({ "type": "string" });
+    let from = json!({ "type": "string", "description": "the symbol to rename" });
+    let to = json!({ "type": "string", "description": "the new symbol name" });
     let dir = json!({ "type": "string", "description": "directory to search (default: .)" });
     json!([
         tool(
@@ -109,9 +111,27 @@ fn tools() -> Value {
         ),
         tool(
             "format",
-            "Reindent an Emacs Lisp file in place",
+            "Reindent a Lisp file in place (native, by dialect)",
             json!({ "file": file }),
             &["file"]
+        ),
+        tool(
+            "check",
+            "Parse-check a Lisp file; report diagnostics (empty = clean)",
+            json!({ "file": file }),
+            &["file"]
+        ),
+        tool(
+            "rename",
+            "Rename a symbol across a file (symbol-exact, safe)",
+            json!({ "file": file, "from": from, "to": to }),
+            &["file", "from", "to"]
+        ),
+        tool(
+            "inline",
+            "Inline a function at its call sites (safe subset)",
+            json!({ "file": file, "name": name }),
+            &["file", "name"]
         ),
     ])
 }
@@ -185,6 +205,42 @@ fn run_tool(name: &str, args: &Value) -> Result<String, String> {
             }
             Ok("ok".to_string())
         }
+        "check" => {
+            let file = arg(args, "file")?;
+            let dialect = dialect_for_path(Path::new(file));
+            let source = read(file)?;
+            let diagnostics = crate::check(&source, dialect);
+            Ok(if diagnostics.is_empty() {
+                "ok".to_string()
+            } else {
+                crate::diagnostics_text(file, &diagnostics)
+            })
+        }
+        "rename" => {
+            let file = arg(args, "file")?;
+            let from = arg(args, "from")?;
+            let to = arg(args, "to")?;
+            let dialect = dialect_for_path(Path::new(file));
+            let outcome =
+                crate::refactor::rename_symbol_in_file(Path::new(file), from, to, dialect)
+                    .map_err(|e| e.to_string())?;
+            Ok(format!(
+                "renamed {} occurrence(s): {from} -> {to}  {}",
+                outcome.renamed, outcome.new_file_hash
+            ))
+        }
+        "inline" => {
+            let file = arg(args, "file")?;
+            let name = arg(args, "name")?;
+            let dialect = dialect_for_path(Path::new(file));
+            let outcome =
+                crate::refactor::inline_definition_in_file(Path::new(file), name, dialect)
+                    .map_err(|e| e.to_string())?;
+            Ok(format!(
+                "inlined {} call site(s): {name}  {}",
+                outcome.inlined, outcome.new_file_hash
+            ))
+        }
         "find" => {
             let name = arg(args, "name")?;
             let dir = args.get("dir").and_then(Value::as_str).unwrap_or(".");
@@ -257,6 +313,22 @@ mod tests {
         assert!(names.contains(&"struct_read"));
         assert!(names.contains(&"struct_edit"));
         assert!(names.contains(&"refs"));
+        assert!(names.contains(&"check"));
+    }
+
+    #[test]
+    fn check_tool_reports_clean_and_broken() {
+        let dir = tempfile::tempdir().unwrap();
+        let ok = dir.path().join("ok.el");
+        std::fs::write(&ok, "(defun f (x)\n  (+ x 1))\n").unwrap();
+        assert_eq!(
+            run_tool("check", &json!({ "file": ok.to_str().unwrap() })).unwrap(),
+            "ok"
+        );
+        let bad = dir.path().join("bad.el");
+        std::fs::write(&bad, "(defun f (x\n").unwrap();
+        let text = run_tool("check", &json!({ "file": bad.to_str().unwrap() })).unwrap();
+        assert!(text.contains("bad.el:1: "), "{text:?}");
     }
 
     #[test]

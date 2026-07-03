@@ -6,6 +6,38 @@ Codebase): `docs/dev/architecture.md`, `docs/dev/formatter.md`, `CONTEXT.md`,
 
 ## Now
 
+- **`inline` command landed** (ADR-0032): `lisplens inline <name> <file>` (+ MCP
+  `inline`) expands a function at its call sites — the benchmark's inline-expand as
+  one atomic step. Restricted to the provably safe subset: a single
+  `defun`/`defsubst`/`cl-defun`/`cl-defsubst` or Scheme `(define (name …) …)` with
+  required-only params and a non-recursive body; niladic → body substituted
+  directly, with-params → `(let ((p a) …) body)` (single-eval, order-preserving,
+  what `defsubst` compiles to). Macros, variables, `&`-lambda-lists, recursion,
+  arity mismatch → **refused** with a reason, never mis-expanded; only outermost of
+  nested same-name calls per run; definition left in place; touched forms
+  reindented + validated. `inline_definition_in_file` in `src/refactor.rs`. 118
+  tests. **Next in ADR-0032: `extract` (needs the s-expr pattern-language design
+  first — also covers guard-removal `(when flag (foo))` → `(foo)`, `progn`
+  unwrap, etc.).**
+- **`rename` command landed** (ADR-0032): `lisplens rename <old> <new> <file>`
+  (+ MCP `rename`) renames a symbol across a file — **symbol-exact in code and
+  data**, never substrings/keywords/strings/comments, so sibling symbols survive
+  by construction (no `(?!-)` lookahead). Collapses the benchmark's proven idiom
+  (`refs → line edit batch → refs`) into one call: splice → reindent the touched
+  top-level forms (native engines) → validate-then-write, reporting the site
+  count + new file hash; a missing `from` is an error, not a silent no-op.
+  Verified on the benchmark's own trap (`c-macro-cache` renamed, `-get`/`-start-pos`
+  siblings untouched). New `src/refactor.rs` (the home for ADR-0032 procedures).
+  113 tests.
+- **`check` command landed** (ADR-0032, first of the refactoring procedures): a
+  standalone parse-check — `lisplens check <file>` (+ MCP `check`) parses by
+  dialect and reports `path:line: message` diagnostics, silent + exit 0 when
+  clean, non-zero on parse errors. Surfaces the guarantee lisplens already
+  enforces on every edit (validate-then-write, ADR-0005) so agents/CI need not
+  shell out to `emacs -Q --batch check-parens` (the benchmark baseline did,
+  repeatedly). `check`/`diagnostics_text` in `lib.rs`. On branch
+  `feat/refactoring-procedures`.
+
 - **Polyglot native formatter — every Emacs-bundled Lisp indenter now has an
   engine** (ADR-0031, 2026-07-04). The formatter dispatches by dialect over one
   shared driver + three faithful engines: Emacs Lisp (`lisp-indent-function`),
