@@ -221,8 +221,9 @@ fn run_tool(name: &str, args: &Value) -> Result<String, String> {
             let from = arg(args, "from")?;
             let to = arg(args, "to")?;
             let dialect = dialect_for_path(Path::new(file));
-            let outcome = crate::refactor::rename_symbol_in_file(Path::new(file), from, to, dialect)
-                .map_err(|e| e.to_string())?;
+            let outcome =
+                crate::refactor::rename_symbol_in_file(Path::new(file), from, to, dialect)
+                    .map_err(|e| e.to_string())?;
             Ok(format!(
                 "renamed {} occurrence(s): {from} -> {to}  {}",
                 outcome.renamed, outcome.new_file_hash
@@ -232,8 +233,9 @@ fn run_tool(name: &str, args: &Value) -> Result<String, String> {
             let file = arg(args, "file")?;
             let name = arg(args, "name")?;
             let dialect = dialect_for_path(Path::new(file));
-            let outcome = crate::refactor::inline_definition_in_file(Path::new(file), name, dialect)
-                .map_err(|e| e.to_string())?;
+            let outcome =
+                crate::refactor::inline_definition_in_file(Path::new(file), name, dialect)
+                    .map_err(|e| e.to_string())?;
             Ok(format!(
                 "inlined {} call site(s): {name}  {}",
                 outcome.inlined, outcome.new_file_hash

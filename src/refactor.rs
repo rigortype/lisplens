@@ -398,8 +398,7 @@ fn classify_def<'a>(form: &'a Datum<'a>, name: &str) -> Option<Result<DefBody<'a
         return Some(finish_body(name, &items[3..], params));
     }
     if MACRO_DEFS.contains(&head) {
-        return (as_sym(items.get(1)?) == Some(name))
-            .then(|| Err(format!("`{name}` is a macro")));
+        return (as_sym(items.get(1)?) == Some(name)).then(|| Err(format!("`{name}` is a macro")));
     }
     if VAR_DEFS.contains(&head) {
         return (as_sym(items.get(1)?) == Some(name))
@@ -466,7 +465,9 @@ fn parse_params_from<'a>(items: &'a [Datum<'a>]) -> Result<Vec<&'a str>, String>
     for it in items {
         match &it.kind {
             DatumKind::Symbol(s) if s.starts_with('&') => {
-                return Err(format!("argument list has `{s}` (only required parameters inline)"));
+                return Err(format!(
+                    "argument list has `{s}` (only required parameters inline)"
+                ));
             }
             DatumKind::Symbol(s) => params.push(*s),
             _ => return Err("argument list has a non-symbol parameter (destructuring)".into()),
@@ -523,7 +524,10 @@ mod tests {
         let err = rename_symbol_in_file(&path, "nope", "x", Dialect::EmacsLisp).unwrap_err();
         assert!(matches!(err, RenameError::NoOccurrences(_)));
         // file untouched
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "(defun foo () 1)\n");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "(defun foo () 1)\n"
+        );
     }
 
     #[test]
@@ -586,7 +590,11 @@ mod tests {
         let (_d, a) = write_temp("a.el", "(defun f (x) (+ x 1))\n(f 1 2)\n");
         assert!(matches!(
             inline_definition_in_file(&a, "f", Dialect::EmacsLisp),
-            Err(InlineError::ArityMismatch { expected: 1, found: 2, .. })
+            Err(InlineError::ArityMismatch {
+                expected: 1,
+                found: 2,
+                ..
+            })
         ));
         let (_d, n) = write_temp("n.el", "(defun f (x) x)\n(g 1)\n");
         assert!(matches!(

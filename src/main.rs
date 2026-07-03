@@ -259,9 +259,15 @@ fn usage() -> ExitCode {
     eprintln!("  lisplens find <name> [dir]    find definitions by name (default dir: .)");
     eprintln!("  lisplens refs <name> [dir]    find symbol occurrences (code/data tagged)");
     eprintln!("  lisplens format [--nameless] <file>  reindent a Lisp file (native, by dialect)");
-    eprintln!("  lisplens check <file>         parse-check a Lisp file (diagnostics; non-zero on errors)");
-    eprintln!("  lisplens rename <old> <new> <file>   rename a symbol across a file (symbol-exact, safe)");
-    eprintln!("  lisplens inline <name> <file>        inline a function at its call sites (safe subset)");
+    eprintln!(
+        "  lisplens check <file>         parse-check a Lisp file (diagnostics; non-zero on errors)"
+    );
+    eprintln!(
+        "  lisplens rename <old> <new> <file>   rename a symbol across a file (symbol-exact, safe)"
+    );
+    eprintln!(
+        "  lisplens inline <name> <file>        inline a function at its call sites (safe subset)"
+    );
     eprintln!("  lisplens mcp                  run the MCP server over stdio");
     eprintln!();
     eprintln!("Skeleton stage — see CONTEXT.md and docs/adr/ for the full design.");
