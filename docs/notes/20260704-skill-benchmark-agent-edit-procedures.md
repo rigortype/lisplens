@@ -186,4 +186,19 @@ fine anyway.
   trap eval *warned* about siblings, which flattered the baseline. An unwarned
   naive run is where lisplens' safety margin is widest and wasn't measured here.
 - All fixtures are Emacs Lisp. Other dialects parse/edit but weren't benchmarked;
-  `format`/auto-reindent is Elisp-only.
+  `format`/auto-reindent was Elisp-only at benchmark time. *(Update, later
+  2026-07-04: the multi-dialect formatter, ADR-0031, extends native reindent to
+  Common Lisp and the Scheme family (`has_native_engine`). Re-benchmark on those
+  dialects once the global binary is reinstalled.)*
+
+## Follow-up: functional improvements this suggests for lisplens (ADR-0032)
+
+The procedural data above says the gap is on the **edit side**: agents hand-assemble
+a `refs → line edit batch → refs` idiom for every symbol edit, and iteration 4's
+inline-expand ⇄ re-inline was a 10-op patch built by hand. That motivates a tier of
+**atomic, self-verifying refactoring procedures** — `rename` (symbol-exact, optional
+comment/string mentions), `inline` (expand a def at its call sites), `extract`/`fold`
+(structural pattern → call), and a standalone `check` (the `check-parens` the
+baseline shelled out to Emacs for). Design + open problems (inline hygiene, the
+`extract` pattern language, cross-file atomicity) are in
+`docs/adr/0032-atomic-refactoring-procedures.md`.
