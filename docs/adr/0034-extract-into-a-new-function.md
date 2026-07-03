@@ -87,6 +87,6 @@ accepted — implemented in `src/refactor.rs` (`extract_into_function`), CLI
   collapsing the hand-done cut / write-defun / replace-with-call / reindent /
   parse-check into one safe step.
 - This completes the ADR-0032 member list (`check`, `rename`, `inline`, `rewrite`,
-  `extract`). Free-variable inference, block (`anchor + count`) extraction,
-  multi-site extraction, non-`defun` kinds, and non-default placement are the
-  documented future opt-ins.
+  `extract`). Block (`anchor + count`) extraction, the top follow-up, was since
+  added in **ADR-0035**. Free-variable inference, multi-site extraction,
+  non-`defun` kinds, and non-default placement remain documented future opt-ins.
