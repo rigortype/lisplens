@@ -240,8 +240,16 @@ so this engine targets **cljfmt** (the formatter Clojure developers run, and the
 origin of the model the whole ecosystem — clojure-ts-mode, cljstyle, modern
 clojure-mode — converged on). The survey is `docs/notes/20260704-clojure-indentation-survey.md`.
 
-The model is cljfmt's `:inner`/`:block` rules, a **pure function of the s-expression
-tree** (no tree-sitter, no Emacs). To indent a line inside innermost container `c`
+Two styles (ADR-0039 semantic, ADR-0040 fixed). **Semantic** (default) is the model
+below. **Fixed / Tonsky** (`format --tonsky`, or a `clojure-ts-indent-style: fixed`
+file-/dir-local → `FormatConfig.clojure_fixed_indent`) replaces only the
+round-list-with-symbol-head branch: every symbol-headed list body indents a flat
+`open + 2` (no rule table, no align-under-first-argument, threading included);
+collections, reader conditionals, and non-symbol heads are identical to semantic.
+Its oracle is `cljfmt fix --config` with `{:indents {#re ".*" [[:inner 0]]}}`.
+
+The semantic model is cljfmt's `:inner`/`:block` rules, a **pure function of the
+s-expression tree** (no tree-sitter, no Emacs). To indent a line inside innermost `c`
 (`open` = `c`'s open-delimiter column; value children counted, so comments/`#_`/
 metadata never consume a slot):
 
@@ -338,22 +346,30 @@ diff mine.el em.el
 
   ```sh
   LL=target/debug/lisplens
-  cat > .cljfmt.edn <<'EDN'
+  cat > fixed.edn <<'EDN'
   {:remove-surrounding-whitespace? false :remove-trailing-whitespace? false
    :insert-missing-whitespace? false :remove-consecutive-blank-lines? false
    :remove-multiple-non-indenting-spaces? false :sort-ns-references? false
    :indentation? true}
   EDN
+  CF=$(pwd)/fixed.edn                 # semantic; add `:indents {#re ".*" [[:inner 0]]}}` for Tonsky
   sed 's/^[[:space:]]*//' SRC.clj > mine.clj; cp mine.clj cf.clj
-  cljfmt fix cf.clj; $LL format mine.clj
+  cljfmt fix --config "$CF" --no-read-clj-config-files cf.clj
+  $LL format mine.clj                 # add `--tonsky` when the config is the fixed one
   diff cf.clj mine.clj
   ```
 
+  **Gotcha:** cljfmt reads `.cljfmt.edn` from the **current working directory**, not
+  the target file's directory — always pass `--config` (and `--no-read-clj-config-files`)
+  or a stray/absent CWD config silently falls back to cljfmt's *default* (semantic,
+  whitespace-normalising) config and the comparison is wrong.
+
   On broad realistic corpora (ns/require, destructuring, nested `let`/`try`,
   threading, `defmulti`/`defmethod`, `deftype`/`reify`/`letfn`, `defmacro` with
-  backquote, `condp`, `#(…)`, `#?(…)`) lisplens is byte-exact vs cljfmt. Known
-  limitation: comment-only lines are the shared driver's, not the engine's, and can
-  differ from cljfmt.
+  backquote, `condp`, `#(…)`, `#?(…)`) lisplens is byte-exact vs cljfmt in **both**
+  the semantic and the Tonsky style (reitit + ring + hiccup: 268/272, the residual 4
+  the `#_`-discard limitation). Known limitation: comment-only lines are the shared
+  driver's, not the engine's, and can differ from cljfmt.
 - For a Nameless corpus (`~/repo/emacs/php-mode/lisp`), format with
   `lisplens format --nameless` and enable Nameless on the Emacs side:
   `-l nameless.el … (nameless-mode 1) (font-lock-ensure)` **before**

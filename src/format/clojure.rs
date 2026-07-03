@@ -49,8 +49,16 @@ const MAX_DEPTH: usize = 3;
 
 /// Indent the code line starting at `offset`, given the whole `data` tree and the
 /// innermost containing collection `c` (the driver's `container_at`). Returns the
-/// target column; `body` is `lisp-body-indent` (2 by default).
-pub(super) fn indent(cols: &Cols, data: &[Datum], c: &Datum, offset: usize, body: usize) -> usize {
+/// target column; `body` is `lisp-body-indent` (2 by default). `fixed` selects the
+/// Tonsky style (ADR-0040): every symbol-headed list body at a flat `+2`.
+pub(super) fn indent(
+    cols: &Cols,
+    data: &[Datum],
+    c: &Datum,
+    offset: usize,
+    body: usize,
+    fixed: bool,
+) -> usize {
     let DatumKind::List { items, delim, .. } = &c.kind else {
         return 0;
     };
@@ -75,9 +83,19 @@ pub(super) fn indent(cols: &Cols, data: &[Datum], c: &Datum, offset: usize, body
     let (stack, reader_cond) = container_stack(data, offset);
 
     // A reader conditional `#?(…)` / `#?@(…)` is data, not a call: its clauses align
-    // under the first element like a collection (cljfmt).
+    // under the first element like a collection (cljfmt). Same in both styles.
     if reader_cond {
         return coll_indent(cols, items, c.span.start as usize, open_col, Delim::Round);
+    }
+
+    // Fixed / Tonsky style: a symbol-headed list bodies at a flat `+2`, everything
+    // else (a non-symbol head) uses the default alignment — no rule table, no
+    // `:block`/`:inner` (cljfmt with `{:indents {#re ".*" [[:inner 0]]}}`).
+    if fixed {
+        return match items.first().and_then(head_symbol) {
+            Some(_) => open_col + body,
+            None => default_indent(cols, items, open_col),
+        };
     }
 
     if inner_applies(&stack, offset) {
@@ -384,6 +402,16 @@ mod tests {
         crate::format::format(input, &FormatConfig::default(), Dialect::Clojure)
     }
 
+    /// Reindent in the fixed / Tonsky style (ADR-0040), the oracle being `cljfmt fix
+    /// --config {:indents {#re ".*" [[:inner 0]]}}`.
+    fn fmt_fixed(input: &str) -> String {
+        let config = FormatConfig {
+            clojure_fixed_indent: true,
+            ..FormatConfig::default()
+        };
+        crate::format::format(input, &config, Dialect::Clojure)
+    }
+
     #[test]
     fn block_and_inner_bodies() {
         // when/let (:block 1), do/cond (:block 0), defn/fn (:inner 0).
@@ -559,5 +587,40 @@ name 1)";
          (map inc)
          (filter pos?))))";
         assert_eq!(fmt(input), input);
+    }
+
+    #[test]
+    fn fixed_tonsky_style() {
+        // Every symbol-headed list body is a flat +2 (no rule table, no
+        // align-under-arg for calls, threading included); collections align under
+        // the first element; a non-symbol head still uses the default alignment;
+        // `#(…)` bodies at +2. Golden from `cljfmt fix` with the Tonsky config.
+        let input = "\
+(defn f [x]
+(when x
+(foo bar
+baz)
+(-> a (b)
+(c))))
+[1
+2]
+((g) x
+y)
+#(foo %
+%2)";
+        let want = "\
+(defn f [x]
+  (when x
+    (foo bar
+      baz)
+    (-> a (b)
+      (c))))
+[1
+ 2]
+((g) x
+     y)
+#(foo %
+   %2)";
+        assert_eq!(fmt_fixed(input), want, "\n{}", fmt_fixed(input));
     }
 }
