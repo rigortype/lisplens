@@ -6,6 +6,19 @@ Codebase): `docs/dev/architecture.md`, `docs/dev/formatter.md`, `CONTEXT.md`,
 
 ## Now
 
+- **`rewrite` designed** (ADR-0033, on branch `design/extract-pattern-language`):
+  the ADR-0032 `extract` member, resolved via a grilling session into a general
+  **structural pattern→template rewrite** ("structural sed" — parse-safe + exact
+  matching, *not* behaviour-preserving; the user asserts semantics). Pattern
+  language: metavariables `$name` / wildcard `$_` / sequence `$name...` / classes
+  `$name:class` (any/atom/lit/sym/list, for duplication safety); whole-tree,
+  outermost-non-overlapping, single-pass matching; structural equality =
+  span/line-ignoring `DatumKind` compare with literal leaves; verbatim template
+  expansion + reindent; stdin spec (user-tag heredocs, **optional** `@ file-hash`
+  drift gate); single-file first. `extract` renamed → `rewrite`; the true "extract into a *new* function"
+  is a separate future member. Vocabulary recorded in `CONTEXT.md`. **Next: build
+  it in `src/refactor.rs` (matcher + template substituter).** Not yet implemented.
+
 - **`inline` command landed** (ADR-0032): `lisplens inline <name> <file>` (+ MCP
   `inline`) expands a function at its call sites — the benchmark's inline-expand as
   one atomic step. Restricted to the provably safe subset: a single

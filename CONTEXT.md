@@ -87,3 +87,31 @@ Move a list boundary inward to expel the edge element out of the list. The inver
 
 **Split / Join**:
 Split one list into two at a point / merge two adjacent lists into one.
+
+## Refactoring procedures
+
+Atomic, self-verifying compositions over the primitives + the safety pipeline (ADR-0032). `check` / `rename` / `inline` have landed; `rewrite` is designed (ADR-0033).
+
+**Rewrite**:
+The general structural pattern→template procedure — a "structural sed" (ADR-0033). Match sub-forms by an s-expr **Pattern** and replace each with a **Template**. Unlike Rename and Inline it is **not** behaviour-preserving (guard removal `(when flag (foo))` → `(foo)` drops the guard); lisplens guarantees only parse-safety and exact structural matching, never that the rewrite preserves meaning — the user asserts semantics.
+_Avoid_: extract (reserved for the future "extract into a *new* function"), replace, codemod
+
+**Pattern / Template**:
+The two s-exprs of a Rewrite spec, parsed in the file's dialect. The Pattern is matched against the tree (literals matched structurally, Metavariables captured); the Template is emitted with each captured Metavariable substituted verbatim. Supplied over stdin (user-tag heredocs, optional `@ <file-hash>` drift gate).
+_Avoid_: match/replace, LHS/RHS, rule
+
+**Metavariable**:
+A Pattern/Template hole `$name` that captures (and re-emits) the single form at its position; `$_` is a non-capturing wildcard. A literal `$`-symbol is escaped `$$`. Repeated occurrences must bind structurally-equal forms (non-linear matching).
+_Avoid_: hole, variable, placeholder, wildcard (that is only `$_`)
+
+**Sequence metavariable**:
+`$name...` (≡ `$name ...`) — a Metavariable capturing a contiguous run of sibling forms (e.g. `(progn $body...)`). At most one per list.
+_Avoid_: rest, splat, ellipsis, varargs
+
+**Metavariable class**:
+`$name:class` — a syntactic filter narrowing what a Metavariable matches: `any` / `atom` / `lit` / `sym` / `list`. The user's tool for duplication safety (e.g. `$n:atom` so a side-effecting call is not duplicated by a fold). Filter only — it does not select among Templates.
+_Avoid_: type, constraint, guard, predicate
+
+**Structural equality**:
+Equality of two forms **modulo formatting**: recursive comparison of `DatumKind` ignoring `span`/`line` (so whitespace and comments do not matter), with leaf text compared literally (no reader-sugar, number, or CL-case normalization). The basis of literal matching and non-linear matching. (Distinct from `Datum`'s derived `==`, which compares spans.)
+_Avoid_: deep equality, sexp equality, structural match
