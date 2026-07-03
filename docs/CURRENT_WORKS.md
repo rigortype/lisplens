@@ -4,7 +4,74 @@ Ephemeral snapshot. **Durable knowledge is in the dev docs** (see `AGENTS.md` �
 Codebase): `docs/dev/architecture.md`, `docs/dev/formatter.md`, `CONTEXT.md`,
 `docs/adr/`.
 
+## Handoff — resume here (2026-07-04 session end)
+
+**Git.** On branch **`design/extract-pattern-language`** at `b56f8d4`, **4 commits
+unpushed** ahead of `origin/master` (`6899b5f`); local `master` == `origin/master`
+(synced). The 4 unpushed commits are the **`rewrite` + `extract`** work:
+`9398d9c` rewrite design (ADR-0033) · `7f1a24a` rewrite impl · `2ea3fe2` rewrite
+cookbook (`docs/rewrite.md`) · `b56f8d4` extract (ADR-0034).
+`master`/`origin/master` already have: the polyglot formatter (EL/CL/Scheme +
+fallback, ADR-0031), display-width columns, the PostToolUse `cargo fmt` hook, and
+**merged PR #1** (`check`/`rename`/`inline` + ADR-0032).
+
+**Immediate next step:** push the branch and open a PR for rewrite+extract (like
+PR #1). CI runs `cargo fmt --check` on `dtolnay/rust-toolchain@stable` — **keep the
+local toolchain on CI's stable** (`rustup update stable`; currently rustc 1.96.1)
+or the Format step fails on version drift; CI's Docs step is `cargo doc --no-deps`
+with `RUSTDOCFLAGS=-D warnings` (no public doc linking to a private item).
+
+**Quality gate (all green):** 131 tests, `cargo fmt --check`,
+`clippy --all-targets`, `RUSTDOCFLAGS=-D warnings cargo doc --no-deps`; tree clean.
+34 ADRs.
+
+**Gotchas.**
+- A committed **PostToolUse hook** (`.claude/settings.json`, force-tracked past the
+  global gitexclude) auto-runs `cargo fmt` after any `.rs` Edit/Write — expect
+  post-edit reformats; keep the toolchain on CI stable so local ≡ CI.
+- The formatter fidelity **flat-harness has a `lisp-indent-defmethod` caveat**
+  (de-indenting all lines breaks Emacs's `beginning-of-defun`; lisplens is right,
+  the harness's Emacs is wrong). See `docs/dev/formatter.md`.
+- `rewrite` matches **quoted data too** (whole-tree) and is **not**
+  behaviour-preserving — a "structural sed".
+
+**The ADR-0032 refactoring family is COMPLETE** — `check` / `rename` / `inline` /
+`rewrite` / `extract`, all in `src/refactor.rs`. Design: ADR-0032 (family), ADR-0033
+(rewrite pattern language + `CONTEXT.md` vocabulary + `docs/rewrite.md` cookbook),
+ADR-0034 (extract). Per-member detail below.
+
+**Candidate next work:** (a) PR + merge the rewrite/extract branch; (b) `extract`
+future opt-ins — free-var inference (crosses the ADR-0003 ceiling; weigh
+carefully), block `anchor+count` extraction, non-`defun` kinds; (c) formatter long
+tail / native indenters for non-bundled dialects (Deferred list below); (d) move
+`calculate-lisp-indent` into `lispexp-emacs` (`docs/notes/20260704-delegation-boundary-review.md`).
+
 ## Now
+
+- **`extract` implemented** (ADR-0034) — the last ADR-0032 member: `lisplens
+  extract <file> <anchor> <name> [param...]` (+ MCP `extract`) pulls the form at
+  `anchor` into a new function and replaces it with a call. **User supplies the
+  name + params; lisplens does not infer free variables** (stays within the
+  ADR-0003 semantic ceiling — like `rewrite`, the user asserts, lisplens
+  guarantees parse-safety). A pure cut+wrap (no symbol substitution): builds
+  `(defun NAME (PARAMS) <selection>)` before the enclosing top-level form and
+  `(NAME PARAMS)` in place, per-dialect def form (elisp/CL `defun`, Scheme
+  `define`, Clojure `defn []`; others error), reindented + validated.
+  `extract_into_function` in `src/refactor.rs`. 131 tests. **The ADR-0032
+  refactoring family (check/rename/inline/rewrite/extract) is complete.** Future
+  opt-ins: free-var inference, block (`anchor+count`) extraction, non-`defun` kinds.
+
+- **`rewrite` implemented** (ADR-0033): `lisplens rewrite <file>` (spec on stdin)
+  + MCP `rewrite` — a structural pattern→template "sed" in `src/refactor.rs`
+  (`rewrite_in_file`): a `Datum` matcher (metavariables + classes + non-linear +
+  trailing sequence), `struct_eq` (span/line-ignoring `DatumKind` compare, literal
+  leaves), whole-tree outermost single-pass collection, and a verbatim template
+  substituter, over the splice→reindent→validate pipeline. Verified on the ADR's
+  examples from the CLI (guard removal, if→when, progn-unwrap sequence,
+  class-guarded fold, non-linear, deletion, drift, error cases). 127 tests. User
+  guide + a verified rewrite cookbook in **`docs/rewrite.md`** (the "presets are
+  documentation" deliverable). `extract` renamed → `rewrite`; the true "extract
+  into a new function" is the one unbuilt ADR-0032 member.
 
 - **`inline` command landed** (ADR-0032): `lisplens inline <name> <file>` (+ MCP
   `inline`) expands a function at its call sites — the benchmark's inline-expand as
@@ -15,10 +82,7 @@ Codebase): `docs/dev/architecture.md`, `docs/dev/formatter.md`, `CONTEXT.md`,
   what `defsubst` compiles to). Macros, variables, `&`-lambda-lists, recursion,
   arity mismatch → **refused** with a reason, never mis-expanded; only outermost of
   nested same-name calls per run; definition left in place; touched forms
-  reindented + validated. `inline_definition_in_file` in `src/refactor.rs`. 118
-  tests. **Next in ADR-0032: `extract` (needs the s-expr pattern-language design
-  first — also covers guard-removal `(when flag (foo))` → `(foo)`, `progn`
-  unwrap, etc.).**
+  reindented + validated. `inline_definition_in_file` in `src/refactor.rs`.
 - **`rename` command landed** (ADR-0032): `lisplens rename <old> <new> <file>`
   (+ MCP `rename`) renames a symbol across a file — **symbol-exact in code and
   data**, never substrings/keywords/strings/comments, so sibling symbols survive
@@ -35,8 +99,7 @@ Codebase): `docs/dev/architecture.md`, `docs/dev/formatter.md`, `CONTEXT.md`,
   clean, non-zero on parse errors. Surfaces the guarantee lisplens already
   enforces on every edit (validate-then-write, ADR-0005) so agents/CI need not
   shell out to `emacs -Q --batch check-parens` (the benchmark baseline did,
-  repeatedly). `check`/`diagnostics_text` in `lib.rs`. On branch
-  `feat/refactoring-procedures`.
+  repeatedly). `check`/`diagnostics_text` in `lib.rs`. (Merged to master via PR #1.)
 
 - **Polyglot native formatter — every Emacs-bundled Lisp indenter now has an
   engine** (ADR-0031, 2026-07-04). The formatter dispatches by dialect over one
@@ -47,10 +110,9 @@ Codebase): `docs/dev/architecture.md`, `docs/dev/formatter.md`, `CONTEXT.md`,
   (Clojure/Fennel/Janet/Hy/LFE/Phel/ISLisp/AutoLisp) ride the Emacs Lisp engine as
   the generic fallback (explicit `format` only; auto-format-on-edit is gated to
   `has_native_engine`). CL was built hands-on; the Scheme engine was delegated to
-  a subagent (isolated worktree) and reviewed before merge. State: on **`master`**,
-  **unpushed** — 2 commits ahead of `origin/master` (`6a7be54` CL, `412bec2`
-  Scheme); `origin/master` still at `d4a4da4`. `cargo fmt --check` /
-  `clippy --all-targets` clean. Per-engine detail below.
+  a subagent (isolated worktree) and reviewed before merge. **Merged to
+  `origin/master`** (the whole formatter + display-width + fmt hook are on
+  master). Per-engine detail below.
 - **Display-width columns** (all engines, `unicode-width`): `Cols::col` now
   measures line content by East Asian Width, matching Emacs's `current-column`,
   so a wide/multi-byte glyph before an alignment target advances the column as
@@ -126,8 +188,7 @@ Codebase): `docs/dev/architecture.md`, `docs/dev/formatter.md`, `CONTEXT.md`,
   indent algorithm in `src/format.rs` (+ `nameless.rs`), is the top remaining
   candidate to move into lispexp-emacs; Emacs config resolution is a smaller
   follow-up. Not started — a roadmap item for lispexp-emacs.
-- 106 tests pass, `cargo fmt --check` / `cargo clippy --all-targets` clean; tree
-  clean. 31 ADRs.
+- (Test/ADR counts and git state are current in the Handoff block at the top.)
 - **Touched-region auto-format on Structural edit (ADR-0025/0028) is wired**:
   `apply_struct_patch` reindents the top-level forms an edit fell within
   (`format::reindent_range` + `edit::splice_tracked`), for dialects with a

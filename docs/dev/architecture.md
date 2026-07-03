@@ -20,7 +20,7 @@ content-hash **anchor** for any target, and edit by anchor.
 | `write` | `verify_and_write`: drift gate + validate-then-write + atomic (perms/symlink-safe) (ADR-0005/0017); `write_atomically` is pub |
 | `apply` | end-to-end: read→drift→splice→verify_and_write (`apply_*_to_file`) |
 | `patch` | Line-hash + Structural **patch DSL** parse/apply; `Outcome{new_file_hash, warnings}` (ADR-0021) |
-| `refactor` | Semantic refactoring procedures (ADR-0032): `rename_symbol_in_file` (symbol-exact, whole-file) and `inline_definition_in_file` (expand a function at its call sites, safe subset) over `structural` + the safety pipeline; `extract` is a future member |
+| `refactor` | Semantic refactoring procedures (ADR-0032): `rename_symbol_in_file` (symbol-exact), `inline_definition_in_file` (expand a function at its call sites), `rewrite_in_file` (structural pattern→template "sed", ADR-0033), and `extract_into_function` (pull a form into a new function, ADR-0034 — pure cut+wrap, user-supplied params) over `structural` + the safety pipeline |
 | `search` | `find_definitions` / `find_symbol` (code-vs-data via lispexp `walk`) + text renderers (ADR-0010) |
 | `config` | resolve `indent-tabs-mode`/`tab-width` from file-local/dir-locals/EditorConfig (ADR-0029); file-local + dir-local *parsing* delegated to `lispexp_emacs::{local_vars,dir_locals}` (lispexp ADR-0033), EditorConfig stays in-tree |
 | `format` | native Lisp indenter, dialect-dispatched: shared driver + an `Engine` per bundled Emacs indenter (Emacs Lisp `lisp-indent-function`; Common Lisp `common-lisp-indent-function` in `format/commonlisp.rs`; Scheme family `scheme-indent-function` in `format/scheme.rs`; generic fallback for the rest) — see `formatter.md`; Emacs Lisp bundled table from `lispexp_emacs::indent::bundled_table` (ADR-0011/0025-0028/**0031**; crate split lispexp ADR-0033) |
@@ -42,11 +42,13 @@ format <file>               reindent a Lisp file (native, by dialect; honors con
 check  <file>               parse-check (diagnostics; non-zero exit on errors, ADR-0032)
 rename <old> <new> <file>   rename a symbol across a file (symbol-exact, safe, ADR-0032)
 inline <name> <file>        inline a function at its call sites (safe subset, ADR-0032)
+rewrite <file>              structural pattern→template rewrite, spec on stdin (ADR-0033)
+extract <file> <anchor> <name> [param...]   pull a form into a new function (ADR-0034)
 mcp                         MCP server over stdio
 ```
 MCP tools mirror the CLI: `struct_read`/`line_read`/`struct_edit`/`line_edit`/
-`find`/`refs`/`format`/`check`/`rename`/`inline`. Edit tools take a `patch` string
-(ADR-0019's JSON op-array is a future option).
+`find`/`refs`/`format`/`check`/`rename`/`inline`/`rewrite`/`extract`. Edit tools
+take a `patch`/`spec` string (ADR-0019's JSON op-array is a future option).
 
 ## Patch DSL (ADR-0021)
 

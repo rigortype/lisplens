@@ -1,4 +1,4 @@
-# Atomic, parse-safe refactoring procedures: rename, inline, extract, check
+# Atomic, parse-safe refactoring procedures: rename, inline, rewrite, check
 
 ## Context
 
@@ -54,14 +54,16 @@ CLI verbs mirror into MCP tools (ADR-0020). Members, simplest first:
    with its body, substituting parameters (the benchmark's inline-expand). Safe only
    for *substitutable* bodies — see hygiene below.
 
-3. **`extract` / `fold <pattern> <call>`** — the inverse: find sub-forms matching a
-   structural pattern and replace them with a rewrite (the benchmark's re-inline,
-   generalized). Requires an s-expr pattern language — see below. This member
-   generalizes past fold-to-a-call: the same pattern→rewrite engine covers other
-   structural refactors, e.g. **removing a variable guard**
-   (`(when flag (foo))` → `(foo)`), unwrapping a `progn`, or `(if c a nil)` →
-   `(when c a)`. The pattern language is the shared substrate; each such rewrite
-   is a `(pattern, template)` pair over it.
+3. **`rewrite <file>`** — a general **structural pattern→template rewrite** (the
+   benchmark's re-inline, generalized): match sub-forms by an s-expr pattern and
+   replace them. One engine is the shared substrate for fold-to-a-call, guard
+   removal (`(when flag (foo))` → `(foo)`), `progn` unwrap, `(if c a nil)` →
+   `(when c a)`, etc. — each a `(pattern, template)` pair. Unlike `rename`/`inline`
+   it is **not** behaviour-preserving (a "structural sed"); lisplens guarantees
+   only parse-safety + exact matching, the user asserts semantics. Full design —
+   the pattern language, metavariables + classes, matching semantics, template
+   expansion — is **ADR-0033**. (`extract` was this member's earlier name; that
+   name is now reserved for the separate future "extract into a *new* function".)
 
 4. **`check`** — standalone parse/validate: report lispexp `ErrorKind`, non-zero
    exit on errors. Cheap; replaces the `emacs -Q --batch check-parens` the baseline
@@ -76,10 +78,12 @@ CLI verbs mirror into MCP tools (ADR-0020). Members, simplest first:
   covers `defsubst` accessors like `(nth 3 (syntax-ppss))`) or introduce
   `let`-bindings to preserve single-evaluation and order. Start restricted, and
   **refuse** (never corrupt) the unsafe cases with a clear reason.
-- **Pattern language for `extract`.** Needs metavariables (`?x` binding a sub-form),
+- **Pattern language for `rewrite`.** Needs metavariables binding sub-forms,
   non-linear matching (the same metavar matches equal forms), literal-vs-wildcard,
-  and structural equality modulo formatting. This is `el-search` / `comby`-class
-  work; scope it as its own design step before building.
+  and structural equality modulo formatting — `el-search` / `comby`-class work.
+  **Resolved in ADR-0033** (metavariable syntax `$name`, classes `$name:class`,
+  sequence `$name...`, whole-tree single-pass matching, verbatim template
+  expansion).
 - **Cross-file scope.** Discovery is project-wide (`find`/`refs`) but edits are
   single-file (ADR-0010). A project-wide `rename`/`inline` needs multi-file
   atomicity (all-or-nothing) — a deliberate extension of ADR-0010, not a silent one.
@@ -95,15 +99,16 @@ proposed
 
 - The primitive verbs (ADR-0012) stay; these procedures are **compositions** over
   them plus the safety pipeline, so they add surface without new edit machinery —
-  `rename` is `structural::rename` past a single subtree; `inline`/`extract` are
+  `rename` is `structural::rename` past a single subtree; `inline`/`rewrite` are
   span→edits like every other structural op.
 - The value story matches the benchmark's conclusion (*sell safety, not tokens*):
   each procedure is one deliberate, safe reach a `sed` one-liner can't match on
   siblings/parens, and the built-in post-condition removes the agent's manual
   re-verify step.
-- Ship order by cost/unblocking: **`check`**, **`rename`**, and **`inline`** have
-  landed (`src/refactor.rs`); **`extract`** needs the pattern-language design
-  first. `inline` ships the restricted-safe subset above (niladic direct
-  substitution, params via `let`, everything unsafe refused with a reason).
-- Re-benchmark the inline round-trip against an `inline`/`extract`-equipped build to
+- All members have landed (`src/refactor.rs`): **`check`**, **`rename`**,
+  **`inline`**, **`rewrite`** (ADR-0033), and **`extract`** (ADR-0034 — pull a form
+  into a new function, user-supplied name+params). `inline` ships the
+  restricted-safe subset above; `rewrite` is the general structural sed; `extract`
+  is a pure cut+wrap within the ADR-0003 ceiling.
+- Re-benchmark the inline round-trip against an `inline`/`rewrite`-equipped build to
   quantify the step-count drop (iter-4 was a 10-op hand-assembled `line edit`).

@@ -5,10 +5,11 @@
 //! [`crate::structural`] plus the safety pipeline (splice → reindent →
 //! validate-then-write), so it adds surface without new edit machinery.
 
+use std::collections::HashMap;
 use std::ops::Range;
 use std::path::Path;
 
-use lispexp::{parse, Class, Datum, DatumKind, Options, Walk};
+use lispexp::{parse, Class, Datum, DatumKind, Options, Prefix, Walk};
 
 use crate::edit::{splice_tracked, Edit, SpliceError};
 use crate::format::{has_native_engine, reindent, Touched};
@@ -476,6 +477,866 @@ fn parse_params_from<'a>(items: &'a [Datum<'a>]) -> Result<Vec<&'a str>, String>
     Ok(params)
 }
 
+// ===== rewrite: structural pattern -> template (ADR-0033) =====
+
+/// The result of a successful [`rewrite_in_file`].
+#[derive(Debug)]
+pub struct RewriteOutcome {
+    /// How many sites were rewritten (0 is a valid, idempotent outcome).
+    pub rewritten: usize,
+    /// The file hash after the rewrite, over the reindented content.
+    pub new_file_hash: String,
+}
+
+/// Why a rewrite was refused. No partial write ever happens on an error.
+#[derive(Debug)]
+pub enum RewriteError {
+    /// The stdin spec could not be parsed (missing `pattern`/`template` block,
+    /// unterminated heredoc, malformed metavariable, …). Carries a message.
+    Spec(String),
+    /// The drift `@ <file-hash>` was given and did not match the file.
+    Drift { expected: String, actual: String },
+    /// The edits could not be spliced.
+    Splice(SpliceError),
+    /// The safe write was refused.
+    Write(WriteError),
+    /// A filesystem error.
+    Io(std::io::Error),
+}
+
+impl std::fmt::Display for RewriteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RewriteError::Spec(m) => write!(f, "{m}"),
+            RewriteError::Drift { expected, actual } => {
+                write!(f, "file drifted (expected {expected}, found {actual})")
+            }
+            RewriteError::Splice(e) => write!(f, "splice failed: {e:?}"),
+            RewriteError::Write(e) => write!(f, "{e:?}"),
+            RewriteError::Io(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+/// A metavariable class — a syntactic match filter (ADR-0033).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MClass {
+    Any,
+    Atom,
+    Lit,
+    Sym,
+    List,
+}
+
+/// A parsed metavariable token: `$name` / `$_` / `$name...` / `$name:class`.
+#[derive(Debug, Clone)]
+struct Metavar {
+    /// `None` for the wildcard `$_` (non-capturing).
+    name: Option<String>,
+    class: MClass,
+    /// Whether it is a sequence metavariable (`$name...`).
+    seq: bool,
+}
+
+/// Classify a symbol token: `Some(Ok(mv))` a metavariable, `Some(Err(msg))` a
+/// malformed metavariable (e.g. unknown class), `None` an ordinary literal
+/// symbol (including a `$$`-escaped literal).
+fn metavar_of(s: &str) -> Option<Result<Metavar, String>> {
+    let body = s.strip_prefix('$')?;
+    if body.is_empty() || body.starts_with('$') {
+        return None; // `$` alone, or `$$…` escaped literal
+    }
+    let (body, seq) = match body.strip_suffix("...") {
+        Some(b) => (b, true),
+        None => (body, false),
+    };
+    let (name, class) = match body.split_once(':') {
+        Some((n, c)) => {
+            let class = match c {
+                "any" => MClass::Any,
+                "atom" => MClass::Atom,
+                "lit" => MClass::Lit,
+                "sym" => MClass::Sym,
+                "list" => MClass::List,
+                other => return Some(Err(format!("unknown metavariable class `:{other}`"))),
+            };
+            (n, class)
+        }
+        None => (body, MClass::Any),
+    };
+    let name = (name != "_").then(|| name.to_string());
+    Some(Ok(Metavar { name, class, seq }))
+}
+
+/// The literal text a pattern/template symbol denotes: a `$$`-escaped token
+/// drops one `$` (`$$foo` → `$foo`); everything else is itself.
+fn unescape(s: &str) -> &str {
+    s.strip_prefix('$')
+        .filter(|b| b.starts_with('$'))
+        .map_or(s, |_| &s[1..])
+}
+
+/// Whether `d` is the bare `...` symbol (a separate sequence marker).
+fn is_ellipsis(d: &Datum) -> bool {
+    matches!(&d.kind, DatumKind::Symbol(s) if *s == "...")
+}
+
+/// Whether `d` satisfies metavariable class `class` (ADR-0033).
+fn class_ok(class: MClass, d: &Datum) -> bool {
+    match class {
+        MClass::Any => true,
+        MClass::Sym => matches!(d.kind, DatumKind::Symbol(_)),
+        MClass::List => matches!(d.kind, DatumKind::List { .. }),
+        MClass::Atom => matches!(
+            d.kind,
+            DatumKind::Symbol(_)
+                | DatumKind::Keyword(_)
+                | DatumKind::Number(_)
+                | DatumKind::Str(_)
+                | DatumKind::Char(_)
+                | DatumKind::Bool(_)
+        ),
+        MClass::Lit => matches!(
+            d.kind,
+            DatumKind::Number(_)
+                | DatumKind::Str(_)
+                | DatumKind::Char(_)
+                | DatumKind::Bool(_)
+                | DatumKind::Prefixed {
+                    prefix: Prefix::Quote,
+                    ..
+                }
+        ),
+    }
+}
+
+/// Structural equality **modulo formatting** (ADR-0033): recursive `DatumKind`
+/// comparison ignoring `span`/`line` (so whitespace and comments do not matter),
+/// with leaf text compared literally and no sugar/number/case normalization.
+/// (Distinct from `Datum`'s derived `==`, which compares spans.)
+fn struct_eq(a: &Datum, b: &Datum) -> bool {
+    match (&a.kind, &b.kind) {
+        (DatumKind::Symbol(x), DatumKind::Symbol(y)) => x == y,
+        (DatumKind::Keyword(x), DatumKind::Keyword(y)) => x == y,
+        (DatumKind::Number(x), DatumKind::Number(y)) => x == y,
+        (DatumKind::Str(x), DatumKind::Str(y)) => x == y,
+        (DatumKind::Char(x), DatumKind::Char(y)) => x == y,
+        (DatumKind::Bool(x), DatumKind::Bool(y)) => x == y,
+        (DatumKind::LabelRef { id: x }, DatumKind::LabelRef { id: y }) => x == y,
+        (
+            DatumKind::List {
+                delim: da,
+                items: ia,
+                tail: ta,
+                ..
+            },
+            DatumKind::List {
+                delim: db,
+                items: ib,
+                tail: tb,
+                ..
+            },
+        ) => {
+            da == db
+                && ia.len() == ib.len()
+                && ia.iter().zip(ib).all(|(p, q)| struct_eq(p, q))
+                && opt_eq(ta.as_deref(), tb.as_deref())
+        }
+        (
+            DatumKind::Prefixed {
+                prefix: pa,
+                notation: na,
+                inner: inna,
+                arg: aa,
+            },
+            DatumKind::Prefixed {
+                prefix: pb,
+                notation: nb,
+                inner: innb,
+                arg: ab,
+            },
+        ) => pa == pb && na == nb && struct_eq(inna, innb) && opt_eq(aa.as_deref(), ab.as_deref()),
+        (
+            DatumKind::HashLiteral { tag: ta, inner: ia },
+            DatumKind::HashLiteral { tag: tb, inner: ib },
+        ) => ta == tb && opt_eq(ia.as_deref(), ib.as_deref()),
+        (DatumKind::Label { id: xa, inner: ia }, DatumKind::Label { id: xb, inner: ib }) => {
+            xa == xb && struct_eq(ia, ib)
+        }
+        _ => false,
+    }
+}
+
+fn opt_eq(a: Option<&Datum>, b: Option<&Datum>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(x), Some(y)) => struct_eq(x, y),
+        _ => false,
+    }
+}
+
+/// A capture: a single matched form, or a (possibly empty) contiguous run.
+enum Cap<'t> {
+    One(&'t Datum<'t>),
+    Seq(Vec<&'t Datum<'t>>),
+}
+
+type Binds<'t> = HashMap<String, Cap<'t>>;
+
+/// Record a binding, enforcing non-linear equality; the wildcard (`None`) never
+/// binds. Returns false on a non-linear conflict.
+fn bind<'t>(binds: &mut Binds<'t>, name: &Option<String>, cap: Cap<'t>) -> bool {
+    let Some(name) = name else { return true };
+    match binds.get(name) {
+        None => {
+            binds.insert(name.clone(), cap);
+            true
+        }
+        Some(prev) => cap_eq(prev, &cap),
+    }
+}
+
+fn cap_eq(a: &Cap, b: &Cap) -> bool {
+    match (a, b) {
+        (Cap::One(x), Cap::One(y)) => struct_eq(x, y),
+        (Cap::Seq(x), Cap::Seq(y)) => {
+            x.len() == y.len() && x.iter().zip(y).all(|(p, q)| struct_eq(p, q))
+        }
+        _ => false,
+    }
+}
+
+/// Try to match pattern node `pat` against target node `tgt`, extending `binds`.
+fn try_match<'t>(pat: &Datum, tgt: &'t Datum<'t>, binds: &mut Binds<'t>) -> bool {
+    if let DatumKind::Symbol(s) = &pat.kind {
+        if let Some(Ok(mv)) = metavar_of(s) {
+            // A sequence metavariable is only meaningful inside a list.
+            if mv.seq {
+                return false;
+            }
+            return class_ok(mv.class, tgt) && bind(binds, &mv.name, Cap::One(tgt));
+        }
+    }
+    match (&pat.kind, &tgt.kind) {
+        (DatumKind::Symbol(ps), DatumKind::Symbol(ts)) => unescape(ps) == *ts,
+        (
+            DatumKind::List {
+                delim: pd,
+                items: pi,
+                tail: pt,
+                ..
+            },
+            DatumKind::List {
+                delim: td,
+                items: ti,
+                tail: tt,
+                ..
+            },
+        ) => {
+            pd == td
+                && match_items(pi, ti, binds)
+                && match (pt, tt) {
+                    (None, None) => true,
+                    (Some(p), Some(t)) => try_match(p, t, binds),
+                    _ => false,
+                }
+        }
+        (
+            DatumKind::Prefixed {
+                prefix: pp,
+                notation: pn,
+                inner: pin,
+                arg: pa,
+            },
+            DatumKind::Prefixed {
+                prefix: tp,
+                notation: tn,
+                inner: tin,
+                arg: ta,
+            },
+        ) => {
+            pp == tp
+                && pn == tn
+                && try_match(pin, tin, binds)
+                && match (pa, ta) {
+                    (None, None) => true,
+                    (Some(a), Some(b)) => try_match(a, b, binds),
+                    _ => false,
+                }
+        }
+        (
+            DatumKind::HashLiteral {
+                tag: pt2,
+                inner: pin,
+            },
+            DatumKind::HashLiteral {
+                tag: tt2,
+                inner: tin,
+            },
+        ) => {
+            pt2 == tt2
+                && match (pin, tin) {
+                    (None, None) => true,
+                    (Some(a), Some(b)) => try_match(a, b, binds),
+                    _ => false,
+                }
+        }
+        (
+            DatumKind::Label {
+                id: pid,
+                inner: pin,
+            },
+            DatumKind::Label {
+                id: tid,
+                inner: tin,
+            },
+        ) => pid == tid && try_match(pin, tin, binds),
+        _ => struct_eq(pat, tgt),
+    }
+}
+
+/// Match a pattern list's items against a target list's items, handling a single
+/// trailing sequence metavariable.
+fn match_items<'t>(pat: &[Datum], tgt: &'t [Datum<'t>], binds: &mut Binds<'t>) -> bool {
+    let Ok((fixed, seq)) = compile_items(pat) else {
+        return false; // malformed pattern; validated earlier, be defensive
+    };
+    match seq {
+        None => {
+            fixed.len() == tgt.len() && fixed.iter().zip(tgt).all(|(p, t)| try_match(p, t, binds))
+        }
+        Some(mv) => {
+            if tgt.len() < fixed.len() {
+                return false;
+            }
+            let (head, rest) = tgt.split_at(fixed.len());
+            fixed.iter().zip(head).all(|(p, t)| try_match(p, t, binds))
+                && rest.iter().all(|t| class_ok(mv.class, t))
+                && bind(binds, &mv.name, Cap::Seq(rest.iter().collect()))
+        }
+    }
+}
+
+/// Split a pattern list's items into fixed leading patterns and an optional
+/// trailing sequence metavariable. `...` is a sequence marker only right after a
+/// metavariable; elsewhere it is a literal.
+#[allow(clippy::type_complexity)]
+fn compile_items<'p>(
+    items: &'p [Datum<'p>],
+) -> Result<(Vec<&'p Datum<'p>>, Option<Metavar>), String> {
+    let mut fixed = Vec::new();
+    let mut seq: Option<Metavar> = None;
+    let mut i = 0;
+    while i < items.len() {
+        if seq.is_some() {
+            return Err("a sequence metavariable must be the last element".into());
+        }
+        let it = &items[i];
+        if let DatumKind::Symbol(s) = &it.kind {
+            if let Some(mv) = metavar_of(s) {
+                let mut mv = mv?;
+                if !mv.seq && i + 1 < items.len() && is_ellipsis(&items[i + 1]) {
+                    mv.seq = true;
+                    i += 1; // consume the separate `...`
+                }
+                if mv.seq {
+                    seq = Some(mv);
+                    i += 1;
+                    continue;
+                }
+            }
+        }
+        fixed.push(it);
+        i += 1;
+    }
+    Ok((fixed, seq))
+}
+
+/// Visit every datum node in `data` (pre-order: the node, then its list items /
+/// dotted tail / prefixed inner+arg / hash+label inner).
+fn for_each_node<'t>(data: &'t [Datum<'t>], f: &mut impl FnMut(&'t Datum<'t>)) {
+    for d in data {
+        f(d);
+        match &d.kind {
+            DatumKind::List { items, tail, .. } => {
+                for_each_node(items, f);
+                if let Some(t) = tail {
+                    for_each_node(std::slice::from_ref(t), f);
+                }
+            }
+            DatumKind::Prefixed { inner, arg, .. } => {
+                for_each_node(std::slice::from_ref(inner), f);
+                if let Some(a) = arg {
+                    for_each_node(std::slice::from_ref(a), f);
+                }
+            }
+            DatumKind::HashLiteral {
+                inner: Some(inner), ..
+            } => for_each_node(std::slice::from_ref(inner), f),
+            DatumKind::Label { inner, .. } => for_each_node(std::slice::from_ref(inner), f),
+            _ => {}
+        }
+    }
+}
+
+/// One matched site: the byte span to replace, and each metavariable's captured
+/// verbatim text (with `is_seq`).
+struct RMatch {
+    span: Range<usize>,
+    caps: HashMap<String, (bool, String)>,
+}
+
+/// Collect every site where `pattern` matches, anywhere in the tree.
+fn collect_matches<'t>(pattern: &Datum, data: &'t [Datum<'t>], source: &str) -> Vec<RMatch> {
+    let mut out = Vec::new();
+    for_each_node(data, &mut |node| {
+        let mut binds: Binds = HashMap::new();
+        if try_match(pattern, node, &mut binds) {
+            let caps = binds
+                .into_iter()
+                .map(|(k, cap)| {
+                    let v = match cap {
+                        Cap::One(d) => (false, source[span_of(d)].to_string()),
+                        Cap::Seq(v) if v.is_empty() => (true, String::new()),
+                        Cap::Seq(v) => (
+                            true,
+                            source[v[0].span.start as usize..v[v.len() - 1].span.end as usize]
+                                .to_string(),
+                        ),
+                    };
+                    (k, v)
+                })
+                .collect();
+            out.push(RMatch {
+                span: span_of(node),
+                caps,
+            });
+        }
+    });
+    out
+}
+
+fn span_of(d: &Datum) -> Range<usize> {
+    d.span.start as usize..d.span.end as usize
+}
+
+/// Keep only outermost, non-overlapping matches (splice cannot overlap; nested
+/// matches are reached by re-running).
+fn keep_outermost(mut matches: Vec<RMatch>) -> Vec<RMatch> {
+    matches.sort_by_key(|m| (m.span.start, std::cmp::Reverse(m.span.end)));
+    let mut kept: Vec<RMatch> = Vec::new();
+    let mut covered = 0usize;
+    for m in matches {
+        if m.span.start >= covered {
+            covered = m.span.end;
+            kept.push(m);
+        }
+    }
+    kept
+}
+
+/// Expand `template_text` for one match: substitute each metavariable token with
+/// its captured verbatim text, unescape `$$`, and trim outer whitespace.
+fn expand(
+    template_text: &str,
+    template_data: &[Datum],
+    caps: &HashMap<String, (bool, String)>,
+) -> Result<String, String> {
+    let mut edits: Vec<(Range<usize>, String)> = Vec::new();
+    let mut err: Option<String> = None;
+    for_each_node(template_data, &mut |node| {
+        if err.is_some() {
+            return;
+        }
+        let DatumKind::Symbol(s) = &node.kind else {
+            return;
+        };
+        let span = span_of(node);
+        match metavar_of(s) {
+            Some(Ok(mv)) => {
+                let Some(name) = &mv.name else {
+                    err = Some("`$_` is not allowed in a template".into());
+                    return;
+                };
+                match caps.get(name) {
+                    None => err = Some(format!("template metavariable `${name}` is not bound")),
+                    Some((is_seq, text)) if *is_seq == mv.seq => edits.push((span, text.clone())),
+                    Some(_) => err = Some(format!("metavariable `${name}` arity mismatch")),
+                }
+            }
+            Some(Err(e)) => err = Some(e),
+            None if unescape(s) != *s => edits.push((span, unescape(s).to_string())),
+            None => {}
+        }
+    });
+    if let Some(e) = err {
+        return Err(e);
+    }
+    edits.sort_by_key(|(r, _)| r.start);
+    let mut out = String::new();
+    let mut cur = 0;
+    for (r, t) in edits {
+        out.push_str(&template_text[cur..r.start]);
+        out.push_str(&t);
+        cur = r.end;
+    }
+    out.push_str(&template_text[cur..]);
+    Ok(out.trim().to_string())
+}
+
+/// A parsed stdin rewrite spec (ADR-0033).
+struct RewriteSpec {
+    hash: Option<String>,
+    pattern_text: String,
+    template_text: String,
+}
+
+/// Parse the stdin spec: an optional `@ <hash>` line, then `pattern <<TAG … TAG`
+/// and `template <<TAG … TAG` heredoc blocks.
+fn parse_spec(input: &str) -> Result<RewriteSpec, String> {
+    let lines: Vec<&str> = input.lines().collect();
+    let mut i = 0;
+    while i < lines.len() && lines[i].trim().is_empty() {
+        i += 1;
+    }
+    let hash = lines
+        .get(i)
+        .and_then(|l| l.trim().strip_prefix('@'))
+        .map(|h| {
+            i += 1;
+            h.trim().to_string()
+        });
+    let pattern_text = read_block(&lines, &mut i, "pattern")?;
+    let template_text = read_block(&lines, &mut i, "template")?;
+    Ok(RewriteSpec {
+        hash,
+        pattern_text,
+        template_text,
+    })
+}
+
+fn read_block(lines: &[&str], i: &mut usize, keyword: &str) -> Result<String, String> {
+    while *i < lines.len() && lines[*i].trim().is_empty() {
+        *i += 1;
+    }
+    let header = lines
+        .get(*i)
+        .map(|l| l.trim())
+        .ok_or_else(|| format!("missing `{keyword} <<TAG` block"))?;
+    let tag = header
+        .strip_prefix(keyword)
+        .map(str::trim_start)
+        .and_then(|r| r.strip_prefix("<<"))
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .ok_or_else(|| format!("expected `{keyword} <<TAG`, got `{header}`"))?;
+    *i += 1;
+    let start = *i;
+    while *i < lines.len() {
+        if lines[*i] == tag {
+            let body = lines[start..*i].join("\n");
+            *i += 1;
+            return Ok(body);
+        }
+        *i += 1;
+    }
+    Err(format!("unterminated heredoc `{tag}`"))
+}
+
+/// Reject malformed metavariables (e.g. unknown class) anywhere in `data`.
+fn validate_metavars(data: &[Datum]) -> Result<(), String> {
+    let mut err = None;
+    for_each_node(data, &mut |n| {
+        if let DatumKind::Symbol(s) = &n.kind {
+            if let Some(Err(e)) = metavar_of(s) {
+                err.get_or_insert(e);
+            }
+        }
+    });
+    err.map_or(Ok(()), Err)
+}
+
+/// Reject a template metavariable not bound by the pattern, or one whose sequence
+/// arity disagrees with the pattern's — independent of whether any site matches.
+fn validate_template(pattern: &[Datum], template: &[Datum]) -> Result<(), String> {
+    let mut pat: HashMap<String, bool> = HashMap::new();
+    for_each_node(pattern, &mut |n| {
+        if let DatumKind::Symbol(s) = &n.kind {
+            if let Some(Ok(mv)) = metavar_of(s) {
+                if let Some(name) = mv.name {
+                    pat.insert(name, mv.seq);
+                }
+            }
+        }
+    });
+    let mut err = None;
+    for_each_node(template, &mut |n| {
+        if let DatumKind::Symbol(s) = &n.kind {
+            if let Some(Ok(mv)) = metavar_of(s) {
+                if let Some(name) = &mv.name {
+                    match pat.get(name.as_str()) {
+                        None => {
+                            err.get_or_insert(format!(
+                                "template metavariable `${name}` is not bound by the pattern"
+                            ));
+                        }
+                        Some(seq) if *seq != mv.seq => {
+                            err.get_or_insert(format!("metavariable `${name}` arity mismatch between pattern and template"));
+                        }
+                        _ => {}
+                    }
+                } else {
+                    err.get_or_insert("`$_` is not allowed in a template".to_string());
+                }
+            }
+        }
+    });
+    err.map_or(Ok(()), Err)
+}
+
+/// Apply a structural pattern→template rewrite across `path` (ADR-0033) — a
+/// parse-safe "structural sed". Reads the spec (pattern + template + optional
+/// drift hash) already parsed from stdin; matches the pattern anywhere in the
+/// tree (whole-tree, outermost non-overlapping, single pass), substitutes each
+/// captured metavariable's verbatim text into the template, reindents the touched
+/// top-level forms (native engines), validates, and writes atomically. Zero
+/// matches is a success (idempotent). Not behaviour-preserving — the user asserts
+/// the rewrite's semantics; lisplens guarantees only parse-safety + exact
+/// structural matching.
+pub fn rewrite_in_file(
+    path: &Path,
+    spec_input: &str,
+    dialect: Dialect,
+) -> Result<RewriteOutcome, RewriteError> {
+    let spec = parse_spec(spec_input).map_err(RewriteError::Spec)?;
+    let source = std::fs::read_to_string(path).map_err(RewriteError::Io)?;
+    if let Some(want) = &spec.hash {
+        let actual = file_hash(source.as_bytes());
+        if &actual != want {
+            return Err(RewriteError::Drift {
+                expected: want.clone(),
+                actual,
+            });
+        }
+    }
+    let options = Options::for_dialect(dialect);
+
+    let pat_parsed = parse(&spec.pattern_text, &options);
+    if !pat_parsed.errors.is_empty() {
+        return Err(RewriteError::Spec("pattern does not parse".into()));
+    }
+    let pattern = match pat_parsed.data.as_slice() {
+        [d] => d,
+        [] => return Err(RewriteError::Spec("pattern is empty".into())),
+        _ => return Err(RewriteError::Spec("pattern must be a single form".into())),
+    };
+    let tmpl_parsed = parse(&spec.template_text, &options);
+    if !tmpl_parsed.errors.is_empty() {
+        return Err(RewriteError::Spec("template does not parse".into()));
+    }
+    validate_metavars(&pat_parsed.data).map_err(RewriteError::Spec)?;
+    validate_metavars(&tmpl_parsed.data).map_err(RewriteError::Spec)?;
+    validate_template(&pat_parsed.data, &tmpl_parsed.data).map_err(RewriteError::Spec)?;
+
+    let target = parse(&source, &options);
+    let matches = keep_outermost(collect_matches(pattern, &target.data, &source));
+    if matches.is_empty() {
+        return Ok(RewriteOutcome {
+            rewritten: 0,
+            new_file_hash: file_hash(source.as_bytes()),
+        });
+    }
+
+    let mut edits = Vec::with_capacity(matches.len());
+    for m in &matches {
+        let text =
+            expand(&spec.template_text, &tmpl_parsed.data, &m.caps).map_err(RewriteError::Spec)?;
+        edits.push(Edit {
+            range: m.span.clone(),
+            text,
+        });
+    }
+    let rewritten = edits.len();
+    let expected = file_hash(source.as_bytes());
+    let (spliced, spans) = splice_tracked(&source, edits).map_err(RewriteError::Splice)?;
+    let new_content = if has_native_engine(dialect) {
+        let config = crate::config::resolve(path, &spliced);
+        reindent(
+            &spliced,
+            &config,
+            dialect,
+            None,
+            Touched {
+                expand: &spans,
+                exact: &[],
+            },
+        )
+    } else {
+        spliced
+    };
+    verify_and_write(path, &expected, &new_content, &options).map_err(RewriteError::Write)?;
+    Ok(RewriteOutcome {
+        rewritten,
+        new_file_hash: file_hash(new_content.as_bytes()),
+    })
+}
+
+// ===== extract: pull a form into a new function (ADR-0034) =====
+
+/// The result of a successful [`extract_into_function`].
+#[derive(Debug)]
+pub struct ExtractOutcome {
+    /// The file hash after the extraction, over the reindented content.
+    pub new_file_hash: String,
+}
+
+/// Why an extraction was refused. No partial write ever happens on an error.
+#[derive(Debug)]
+pub enum ExtractError {
+    /// The anchor was not `line:hash[:ordinal]`.
+    BadAnchor(String),
+    /// No form matched the anchor.
+    AnchorNotFound(String),
+    /// The dialect has no known function-definition form yet.
+    UnsupportedDialect(String),
+    /// The edits could not be spliced.
+    Splice(SpliceError),
+    /// The safe write was refused.
+    Write(WriteError),
+    /// A filesystem error.
+    Io(std::io::Error),
+}
+
+impl std::fmt::Display for ExtractError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ExtractError::BadAnchor(a) => write!(f, "anchor `{a}` is not `line:hash[:ordinal]`"),
+            ExtractError::AnchorNotFound(a) => write!(f, "no form at anchor `{a}`"),
+            ExtractError::UnsupportedDialect(d) => write!(f, "extract not supported for {d} yet"),
+            ExtractError::Splice(e) => write!(f, "splice failed: {e:?}"),
+            ExtractError::Write(e) => write!(f, "{e:?}"),
+            ExtractError::Io(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+/// Extract the form at `anchor` into a new function `name` with parameters
+/// `params`, replacing the form with a call `(name params…)` (ADR-0034).
+///
+/// A pure cut + wrap: the selection already uses its free variables by name and
+/// the call site is in their scope, so no symbol substitution is needed —
+/// lisplens supplies neither the name nor the parameters (the user asserts which
+/// free locals are parameters; it does not infer them, per the ADR-0003 ceiling).
+/// The new definition is placed just before the enclosing top-level form, its
+/// wrapper chosen per dialect (`defun`/`define`/`defn`); unsupported dialects are
+/// refused. Parse-safe only: behaviour is preserved only if the parameters cover
+/// the free locals and the selection has no context-dependent non-local exit.
+pub fn extract_into_function(
+    path: &Path,
+    anchor: &str,
+    name: &str,
+    params: &[String],
+    dialect: Dialect,
+) -> Result<ExtractOutcome, ExtractError> {
+    let source = std::fs::read_to_string(path).map_err(ExtractError::Io)?;
+    let options = Options::for_dialect(dialect);
+    let parsed = parse(&source, &options);
+
+    let anchor_val = parse_anchor(anchor).ok_or_else(|| ExtractError::BadAnchor(anchor.into()))?;
+    let located = crate::resolve::resolve(&source, &parsed.data, &anchor_val)
+        .ok_or_else(|| ExtractError::AnchorNotFound(anchor.into()))?;
+    let sel = span_of(located.node);
+
+    // The enclosing top-level form (the def is inserted just before it); falls
+    // back to the selection itself when the form is already top-level.
+    let encl_start = parsed
+        .data
+        .iter()
+        .find(|d| (d.span.start as usize) <= sel.start && sel.end <= (d.span.end as usize))
+        .map_or(sel.start, |d| d.span.start as usize);
+
+    let body = &source[sel.clone()];
+    let def = def_form(dialect, name, params, body)
+        .ok_or_else(|| ExtractError::UnsupportedDialect(format!("{dialect:?}")))?;
+    let call = call_form(name, params);
+
+    let edits = vec![
+        Edit {
+            range: encl_start..encl_start,
+            text: format!("{def}\n\n"),
+        },
+        Edit {
+            range: sel,
+            text: call,
+        },
+    ];
+    let expected = file_hash(source.as_bytes());
+    let (spliced, spans) = splice_tracked(&source, edits).map_err(ExtractError::Splice)?;
+    let new_content = if has_native_engine(dialect) {
+        let config = crate::config::resolve(path, &spliced);
+        reindent(
+            &spliced,
+            &config,
+            dialect,
+            None,
+            Touched {
+                expand: &spans,
+                exact: &[],
+            },
+        )
+    } else {
+        spliced
+    };
+    verify_and_write(path, &expected, &new_content, &options).map_err(ExtractError::Write)?;
+    Ok(ExtractOutcome {
+        new_file_hash: file_hash(new_content.as_bytes()),
+    })
+}
+
+/// Parse a `line:hash[:ordinal]` anchor string.
+fn parse_anchor(token: &str) -> Option<crate::patch::Anchor> {
+    let mut parts = token.split(':');
+    let line = parts.next()?.parse::<u32>().ok()?;
+    let hash = parts.next().filter(|s| !s.is_empty())?.to_string();
+    let ordinal = match parts.next() {
+        Some(s) => Some(s.parse::<u32>().ok()?),
+        None => None,
+    };
+    Some(crate::patch::Anchor {
+        line,
+        hash,
+        ordinal,
+    })
+}
+
+/// The new-function wrapper for `dialect` (`None` if the dialect has no known
+/// def form). Only the wrapper is dialect-specific; `body` is the verbatim
+/// selection.
+fn def_form(dialect: Dialect, name: &str, params: &[String], body: &str) -> Option<String> {
+    let ps = params.join(" ");
+    Some(match dialect {
+        Dialect::EmacsLisp | Dialect::CommonLisp => format!("(defun {name} ({ps}) {body})"),
+        Dialect::Scheme
+        | Dialect::Guile
+        | Dialect::Racket
+        | Dialect::Gauche
+        | Dialect::Mosh
+        | Dialect::Gambit
+        | Dialect::SchemeSuperset => format!("(define ({name} {ps}) {body})"),
+        Dialect::Clojure => format!("(defn {name} [{ps}] {body})"),
+        _ => return None,
+    })
+}
+
+/// The call `(name params…)` that replaces the extracted form.
+fn call_form(name: &str, params: &[String]) -> String {
+    if params.is_empty() {
+        format!("({name})")
+    } else {
+        format!("({name} {})", params.join(" "))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -618,5 +1479,235 @@ mod tests {
         // (still present) keeps its docstring.
         assert!(result.contains("(list 42)"), "{result}");
         assert!(!result.contains("(list \"doc\""), "{result}");
+    }
+
+    // ----- rewrite (ADR-0033) -----
+
+    fn spec(pattern: &str, template: &str) -> String {
+        format!("pattern <<P\n{pattern}\nP\ntemplate <<T\n{template}\nT\n")
+    }
+
+    #[test]
+    fn rewrite_guard_removal_all_sites() {
+        let (_d, path) = write_temp(
+            "a.el",
+            "(defun a ()\n  (when flag\n    (foo)))\n(defun b () (when q (bar)))\n",
+        );
+        let out = rewrite_in_file(
+            &path,
+            &spec("(when $flag $body)", "$body"),
+            Dialect::EmacsLisp,
+        )
+        .unwrap();
+        assert_eq!(out.rewritten, 2);
+        let r = std::fs::read_to_string(&path).unwrap();
+        assert!(r.contains("(defun a ()\n  (foo))"), "{r}");
+        assert!(r.contains("(defun b () (bar))"), "{r}");
+    }
+
+    #[test]
+    fn rewrite_if_to_when_and_progn_unwrap() {
+        let (_d, p1) = write_temp("a.el", "(setq x (if c a nil))\n");
+        rewrite_in_file(
+            &p1,
+            &spec("(if $c $a nil)", "(when $c $a)"),
+            Dialect::EmacsLisp,
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&p1).unwrap(),
+            "(setq x (when c a))\n"
+        );
+
+        // Sequence metavariable unwraps a progn, preserving the forms.
+        let (_d, p2) = write_temp("a.el", "(progn\n  (a)\n  (b))\n");
+        let out = rewrite_in_file(
+            &p2,
+            &spec("(progn $body...)", "$body..."),
+            Dialect::EmacsLisp,
+        )
+        .unwrap();
+        assert_eq!(out.rewritten, 1);
+        assert_eq!(std::fs::read_to_string(&p2).unwrap(), "(a)\n(b)\n");
+    }
+
+    #[test]
+    fn rewrite_class_filter_and_non_linear() {
+        // `:atom` folds a literal/symbol but not a side-effecting call.
+        let (_d, p1) = write_temp("a.el", "(list (double 100) (double (getnum)) (double x))\n");
+        let out = rewrite_in_file(
+            &p1,
+            &spec("(double $n:atom)", "(* 2 $n)"),
+            Dialect::EmacsLisp,
+        )
+        .unwrap();
+        assert_eq!(out.rewritten, 2);
+        assert_eq!(
+            std::fs::read_to_string(&p1).unwrap(),
+            "(list (* 2 100) (double (getnum)) (* 2 x))\n"
+        );
+        // Non-linear: `(eq $x $x)` matches only equal operands.
+        let (_d, p2) = write_temp("a.el", "(list (eq a a) (eq a b))\n");
+        rewrite_in_file(&p2, &spec("(eq $x $x)", "t"), Dialect::EmacsLisp).unwrap();
+        assert_eq!(std::fs::read_to_string(&p2).unwrap(), "(list t (eq a b))\n");
+    }
+
+    #[test]
+    fn rewrite_empty_template_deletes_and_wildcard_matches_any() {
+        // Empty template = deletion; `$_` matches (and discards) any argument.
+        let (_d, path) = write_temp("a.el", "(progn (log x) (real))\n");
+        rewrite_in_file(&path, &spec("(log $_)", ""), Dialect::EmacsLisp).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "(progn  (real))\n");
+    }
+
+    #[test]
+    fn rewrite_zero_matches_is_success() {
+        let (_d, path) = write_temp("a.el", "(foo)\n");
+        let out = rewrite_in_file(&path, &spec("(nope $x)", "$x"), Dialect::EmacsLisp).unwrap();
+        assert_eq!(out.rewritten, 0);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "(foo)\n"); // untouched
+    }
+
+    #[test]
+    fn rewrite_across_dialects_matches_delimiter() {
+        // Clojure `[]` is a distinct delimiter — a `()` pattern must not match it.
+        let (_d, path) = write_temp("a.clj", "(foo (a b) [a b])\n");
+        let out = rewrite_in_file(&path, &spec("(a b)", "AB"), Dialect::Clojure).unwrap();
+        assert_eq!(out.rewritten, 1);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "(foo AB [a b])\n");
+    }
+
+    #[test]
+    fn rewrite_rejects_bad_specs() {
+        let (_d, path) = write_temp("a.el", "(foo bar)\n");
+        // unknown class
+        assert!(matches!(
+            rewrite_in_file(&path, &spec("(foo $x:nope)", "$x"), Dialect::EmacsLisp),
+            Err(RewriteError::Spec(_))
+        ));
+        // unbound template metavariable
+        assert!(matches!(
+            rewrite_in_file(&path, &spec("(foo $x)", "$y"), Dialect::EmacsLisp),
+            Err(RewriteError::Spec(_))
+        ));
+        // arity mismatch (single in pattern, sequence in template)
+        assert!(matches!(
+            rewrite_in_file(&path, &spec("(foo $x)", "$x..."), Dialect::EmacsLisp),
+            Err(RewriteError::Spec(_))
+        ));
+        // multi-form pattern
+        assert!(matches!(
+            rewrite_in_file(&path, &spec("(a) (b)", "x"), Dialect::EmacsLisp),
+            Err(RewriteError::Spec(_))
+        ));
+        std::fs::read_to_string(&path).unwrap(); // file untouched on every error
+    }
+
+    #[test]
+    fn rewrite_drift_gate_when_hash_given() {
+        let (_d, path) = write_temp("a.el", "(foo)\n");
+        let good = crate::hash::file_hash("(foo)\n".as_bytes());
+        let s = format!("@ {good}\n{}", spec("(foo)", "(bar)"));
+        rewrite_in_file(&path, &s, Dialect::EmacsLisp).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "(bar)\n");
+        // A stale hash is refused.
+        let stale = crate::hash::file_hash("different".as_bytes());
+        let s2 = format!("@ {stale}\n{}", spec("(bar)", "(baz)"));
+        assert!(matches!(
+            rewrite_in_file(&path, &s2, Dialect::EmacsLisp),
+            Err(RewriteError::Drift { .. })
+        ));
+    }
+
+    // ----- extract (ADR-0034) -----
+
+    /// Anchor `line:hash` for the form whose verbatim text is `form` at `line`.
+    fn anchor_for(form: &str, line: u32) -> String {
+        format!("{line}:{}", crate::hash::anchor_hash(form.as_bytes()))
+    }
+
+    #[test]
+    fn extract_expression_with_a_param() {
+        let (_d, path) = write_temp(
+            "a.el",
+            "(defun foo (x)\n  (message \"hi\")\n  (* (+ x 1) 2))\n",
+        );
+        let a = anchor_for("(* (+ x 1) 2)", 3);
+        extract_into_function(&path, &a, "compute", &["x".into()], Dialect::EmacsLisp).unwrap();
+        let r = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            r.starts_with("(defun compute (x) (* (+ x 1) 2))\n\n"),
+            "{r}"
+        );
+        assert!(r.contains("  (compute x))"), "{r}");
+    }
+
+    #[test]
+    fn extract_niladic_and_scheme_and_clojure() {
+        // Niladic (Emacs Lisp).
+        let (_d, p1) = write_temp("a.el", "(defun foo ()\n  (side-effect)\n  (bar))\n");
+        extract_into_function(
+            &p1,
+            &anchor_for("(side-effect)", 2),
+            "act",
+            &[],
+            Dialect::EmacsLisp,
+        )
+        .unwrap();
+        let r1 = std::fs::read_to_string(&p1).unwrap();
+        assert!(r1.starts_with("(defun act () (side-effect))\n\n"), "{r1}");
+        assert!(r1.contains("  (act)\n"), "{r1}");
+
+        // Scheme `define`.
+        let (_d, p2) = write_temp("a.scm", "(define (f x)\n  (+ x 1))\n");
+        extract_into_function(
+            &p2,
+            &anchor_for("(+ x 1)", 2),
+            "g",
+            &["x".into()],
+            Dialect::Scheme,
+        )
+        .unwrap();
+        assert!(std::fs::read_to_string(&p2)
+            .unwrap()
+            .starts_with("(define (g x) (+ x 1))\n\n"));
+
+        // Clojure `defn` with `[]` params.
+        let (_d, p3) = write_temp("a.clj", "(defn f [x] (+ x 1))\n");
+        extract_into_function(
+            &p3,
+            &anchor_for("(+ x 1)", 1),
+            "g",
+            &["x".into()],
+            Dialect::Clojure,
+        )
+        .unwrap();
+        assert!(std::fs::read_to_string(&p3)
+            .unwrap()
+            .contains("(defn g [x] (+ x 1))"));
+    }
+
+    #[test]
+    fn extract_rejects_bad_anchor_missing_and_unsupported_dialect() {
+        let (_d, path) = write_temp("a.el", "(defun foo (x) (g x))\n");
+        assert!(matches!(
+            extract_into_function(&path, "nope", "h", &[], Dialect::EmacsLisp),
+            Err(ExtractError::BadAnchor(_))
+        ));
+        assert!(matches!(
+            extract_into_function(&path, "1:dead", "h", &[], Dialect::EmacsLisp),
+            Err(ExtractError::AnchorNotFound(_))
+        ));
+        // Unsupported dialect: a Fennel file with a valid anchor reaches def_form.
+        let (_d, fnl) = write_temp("a.fnl", "(fn [x] (+ x 1))\n");
+        let a = anchor_for("(+ x 1)", 1);
+        assert!(matches!(
+            extract_into_function(&fnl, &a, "g", &["x".into()], Dialect::Fennel),
+            Err(ExtractError::UnsupportedDialect(_))
+        ));
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "(defun foo (x) (g x))\n"
+        ); // untouched
     }
 }
