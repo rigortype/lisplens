@@ -1205,6 +1205,10 @@ pub enum ExtractError {
     RunExceedsSiblings { asked: usize, available: usize },
     /// The dialect has no known function-definition form yet.
     UnsupportedDialect(String),
+    /// The `--also` sites cannot be anti-unified (operators differ, no common
+    /// skeleton, differing improper-list tails), or the caller-supplied parameter
+    /// count does not match the inferred one (ADR-0038). Carries the reason.
+    NotGeneralizable(String),
     /// The edits could not be spliced.
     Splice(SpliceError),
     /// The safe write was refused.
@@ -1223,6 +1227,7 @@ impl std::fmt::Display for ExtractError {
                 "run of {asked} exceeds the {available} sibling form(s) at the anchor"
             ),
             ExtractError::UnsupportedDialect(d) => write!(f, "extract not supported for {d} yet"),
+            ExtractError::NotGeneralizable(why) => write!(f, "cannot generalize sites: {why}"),
             ExtractError::Splice(e) => write!(f, "splice failed: {e:?}"),
             ExtractError::Write(e) => write!(f, "{e:?}"),
             ExtractError::Io(e) => write!(f, "{e}"),
@@ -1288,8 +1293,7 @@ pub fn extract_block_into_function(
         dialect,
         &def,
         encl_start,
-        &[sel],
-        &call,
+        &[(sel, call)],
     )
 }
 
@@ -1331,11 +1335,225 @@ pub fn extract_multi_site(
 
     // Every structurally-equal, non-overlapping occurrence; the anchored run is
     // always among them, so `sites` is non-empty and ascending.
-    let sites = keep_outermost_spans(collect_struct_sites(&pattern, &parsed.data));
-    let def_before = enclosing_top_level(&parsed.data, &sites[0]);
+    let spans = keep_outermost_spans(collect_struct_sites(&pattern, &parsed.data));
+    let def_before = enclosing_top_level(&parsed.data, &spans[0]);
+    let sites: Vec<(Range<usize>, String)> = spans.into_iter().map(|s| (s, call.clone())).collect();
+    finish_extraction(path, &source, &options, dialect, &def, def_before, &sites)
+}
+
+/// Anti-unify the primary `anchor` with every `also` site into one parameterized
+/// function `name`, replacing each site with its own call (ADR-0038). The common
+/// skeleton across the sites is the body; each position where the sites diverge
+/// becomes a parameter, and each site's call passes that site's sub-terms. Sites
+/// are exactly the anchors given — no discovery — and each is a single form.
+/// Refuses (`NotGeneralizable`, no write) when the sites have no common skeleton,
+/// their operators differ, or the caller's parameter count is wrong. Generalizes
+/// *only what differs*: a symbol common to every site (a free local) is baked into
+/// the body unchanged, exactly as single-site extract — no binding analysis (the
+/// ADR-0003 ceiling is held, not crossed deeper).
+pub fn extract_generalized(
+    path: &Path,
+    anchor: &str,
+    also: &[String],
+    name: &str,
+    params: &[String],
+    kind: Option<&str>,
+    dialect: Dialect,
+) -> Result<ExtractOutcome, ExtractError> {
+    let source = std::fs::read_to_string(path).map_err(ExtractError::Io)?;
+    let options = Options::for_dialect(dialect);
+    let parsed = parse(&source, &options);
+
+    // Resolve the primary and every `--also` anchor to a single form each.
+    let mut sites: Vec<&Datum> = Vec::with_capacity(also.len() + 1);
+    for a in std::iter::once(anchor).chain(also.iter().map(String::as_str)) {
+        let av = parse_anchor(a).ok_or_else(|| ExtractError::BadAnchor(a.into()))?;
+        let loc = crate::resolve::resolve(&source, &parsed.data, &av)
+            .ok_or_else(|| ExtractError::AnchorNotFound(a.into()))?;
+        sites.push(loc.node);
+    }
+
+    let holes = anti_unify(&sites, &source).map_err(ExtractError::NotGeneralizable)?;
+    let param_names = generalized_param_names(params, &holes, sites[0])?;
+
+    // Body = the primary site's text with each hole span replaced by its parameter.
+    let body = render_generalized_body(&source, &span_of(sites[0]), &holes, &param_names);
+    let def = def_form(dialect, name, &param_names, &body, kind)
+        .ok_or_else(|| ExtractError::UnsupportedDialect(format!("{dialect:?}")))?;
+
+    // Each site is replaced by a call passing its own sub-terms at the holes.
+    let mut site_spans: Vec<(Range<usize>, String)> = sites
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let args: Vec<&str> = holes.iter().map(|h| h.args[i].as_str()).collect();
+            (span_of(s), call_with_args(name, &args))
+        })
+        .collect();
+    site_spans.sort_by_key(|(sp, _)| sp.start);
+    if site_spans.windows(2).any(|w| w[0].0.end > w[1].0.start) {
+        return Err(ExtractError::NotGeneralizable(
+            "sites overlap (duplicate or nested anchors)".into(),
+        ));
+    }
+    let def_before = enclosing_top_level(&parsed.data, &site_spans[0].0);
     finish_extraction(
-        path, &source, &options, dialect, &def, def_before, &sites, &call,
+        path,
+        &source,
+        &options,
+        dialect,
+        &def,
+        def_before,
+        &site_spans,
     )
+}
+
+/// One anti-unification hole (ADR-0038): a position where the sites diverge. `span`
+/// is the sub-term's byte span in the *primary* site (to render the body); `args`
+/// is each site's own sub-term text, in site order (its call argument).
+struct Hole {
+    span: Range<usize>,
+    args: Vec<String>,
+}
+
+/// Anti-unify `sites` (each a single form; `sites[0]` is primary), collecting holes
+/// left-to-right in the primary. `Err(reason)` when the sites have no common
+/// skeleton: differing operators (a list head), a whole-form divergence (no fixed
+/// structure), or differing improper-list tails.
+fn anti_unify(sites: &[&Datum], source: &str) -> Result<Vec<Hole>, String> {
+    let mut holes = Vec::new();
+    au_walk(sites, source, true, &mut holes)?;
+    Ok(holes)
+}
+
+/// The recursive step: `nodes` are the aligned sub-terms at one position across all
+/// sites. Recurses only through co-structured lists (same delim + arity), keeping
+/// the operator fixed; `is_root` turns a top-level divergence into a refusal.
+fn au_walk(
+    nodes: &[&Datum],
+    source: &str,
+    is_root: bool,
+    holes: &mut Vec<Hole>,
+) -> Result<(), String> {
+    let first = nodes[0];
+    // All equal here → part of the fixed skeleton, no hole.
+    if nodes[1..].iter().all(|d| struct_eq(d, first)) {
+        return Ok(());
+    }
+    // They differ: recurse only when all are lists of the same delim and arity.
+    if let DatumKind::List {
+        delim: d0,
+        items: i0,
+        tail: t0,
+        ..
+    } = &first.kind
+    {
+        let co_structured = nodes[1..].iter().all(|n| {
+            matches!(&n.kind,
+                DatumKind::List { delim, items, .. } if delim == d0 && items.len() == i0.len())
+        });
+        if co_structured {
+            let tails_agree = nodes.iter().all(|n| match &n.kind {
+                DatumKind::List { tail, .. } => opt_eq(tail.as_deref(), t0.as_deref()),
+                _ => false,
+            });
+            if !tails_agree {
+                return Err("improper-list tails differ".into());
+            }
+            for idx in 0..i0.len() {
+                let children: Vec<&Datum> = nodes
+                    .iter()
+                    .map(|n| match &n.kind {
+                        DatumKind::List { items, .. } => &items[idx],
+                        _ => unreachable!("co_structured guaranteed a list"),
+                    })
+                    .collect();
+                // The operator (list head) is never generalized — it must agree.
+                if idx == 0 && !children[1..].iter().all(|c| struct_eq(c, children[0])) {
+                    return Err("operators (list heads) differ".into());
+                }
+                au_walk(&children, source, false, holes)?;
+            }
+            return Ok(());
+        }
+    }
+    // Divergent and not co-structured lists → this whole position is a hole.
+    if is_root {
+        return Err("sites share no common structure".into());
+    }
+    holes.push(Hole {
+        span: span_of(first),
+        args: nodes
+            .iter()
+            .map(|n| source[span_of(n)].to_string())
+            .collect(),
+    });
+    Ok(())
+}
+
+/// Parameter names for the generalized def: the caller's `supplied` list when it
+/// matches the hole count, else generated `arg1`, `arg2`, … skipping any symbol
+/// already in the primary skeleton (so a generated name never captures a body
+/// symbol). A length mismatch is a refusal.
+fn generalized_param_names(
+    supplied: &[String],
+    holes: &[Hole],
+    primary: &Datum,
+) -> Result<Vec<String>, ExtractError> {
+    let n = holes.len();
+    if !supplied.is_empty() {
+        if supplied.len() != n {
+            return Err(ExtractError::NotGeneralizable(format!(
+                "{n} parameter(s) inferred but {} supplied",
+                supplied.len()
+            )));
+        }
+        return Ok(supplied.to_vec());
+    }
+    let mut used = std::collections::HashSet::new();
+    for_each_node(std::slice::from_ref(primary), &mut |node| {
+        if let DatumKind::Symbol(s) = &node.kind {
+            used.insert(s.to_string());
+        }
+    });
+    let mut names = Vec::with_capacity(n);
+    let mut k = 1usize;
+    while names.len() < n {
+        let cand = format!("arg{k}");
+        k += 1;
+        if !used.contains(&cand) {
+            names.push(cand);
+        }
+    }
+    Ok(names)
+}
+
+/// The generalized body: the primary site's text with each hole's (ascending,
+/// non-overlapping) span replaced by its parameter name.
+fn render_generalized_body(
+    source: &str,
+    primary: &Range<usize>,
+    holes: &[Hole],
+    names: &[String],
+) -> String {
+    let mut out = String::new();
+    let mut cursor = primary.start;
+    for (h, nm) in holes.iter().zip(names) {
+        out.push_str(&source[cursor..h.span.start]);
+        out.push_str(nm);
+        cursor = h.span.end;
+    }
+    out.push_str(&source[cursor..primary.end]);
+    out
+}
+
+/// The call `(name arg…)` replacing one generalized site, passing its sub-terms.
+fn call_with_args(name: &str, args: &[&str]) -> String {
+    if args.is_empty() {
+        format!("({name})")
+    } else {
+        format!("({name} {})", args.join(" "))
+    }
 }
 
 /// Byte offset of the top-level form enclosing `span` (its start), or `span.start`
@@ -1346,10 +1564,12 @@ fn enclosing_top_level(data: &[Datum], span: &Range<usize>) -> usize {
         .map_or(span.start, |d| d.span.start as usize)
 }
 
-/// Insert `def_text` before `def_before`, replace every `site` span with `call`,
-/// then reindent the touched forms (native engines), validate, and write
-/// atomically. The shared tail of single- and multi-site extraction. `sites` must
-/// be non-overlapping and ascending, with `def_before <= sites[0].start`.
+/// Insert `def_text` before `def_before`, replace each site span with its own call
+/// text, then reindent the touched forms (native engines), validate, and write
+/// atomically. The shared tail of single-, identical-multi-, and generalizing
+/// extraction (each site carries its own call, so the generalized path can pass a
+/// per-site argument list). `sites` must be non-overlapping and ascending, with
+/// `def_before <= sites[0].0.start`.
 #[allow(clippy::too_many_arguments)]
 fn finish_extraction(
     path: &Path,
@@ -1358,18 +1578,17 @@ fn finish_extraction(
     dialect: Dialect,
     def_text: &str,
     def_before: usize,
-    sites: &[Range<usize>],
-    call: &str,
+    sites: &[(Range<usize>, String)],
 ) -> Result<ExtractOutcome, ExtractError> {
     let mut edits = Vec::with_capacity(sites.len() + 1);
     edits.push(Edit {
         range: def_before..def_before,
         text: format!("{def_text}\n\n"),
     });
-    for s in sites {
+    for (span, call) in sites {
         edits.push(Edit {
-            range: s.clone(),
-            text: call.to_string(),
+            range: span.clone(),
+            text: call.clone(),
         });
     }
     let expected = file_hash(source.as_bytes());
@@ -2259,5 +2478,153 @@ mod tests {
         );
         // One call replaces the first two; the third `(tick)` is untouched.
         assert!(r.contains("(defun a ()\n  (twice)\n  (tick))"), "{r}");
+    }
+
+    // ----- generalizing (anti-unification) extraction via `--also` (ADR-0038) -----
+
+    #[test]
+    fn extract_generalized_one_hole_bakes_common_free_var() {
+        // `(* x 2)` and `(* x 3)` differ only in the constant → one inferred param;
+        // the common free var `x` is baked into the body (user's responsibility).
+        let (_d, path) = write_temp("a.el", "(defun a () (* x 2))\n(defun b () (* x 3))\n");
+        let out = extract_generalized(
+            &path,
+            &anchor_for("(* x 2)", 1),
+            &[anchor_for("(* x 3)", 2)],
+            "scale",
+            &[],
+            None,
+            Dialect::EmacsLisp,
+        )
+        .unwrap();
+        assert_eq!(out.sites, 2);
+        let r = std::fs::read_to_string(&path).unwrap();
+        assert!(r.starts_with("(defun scale (arg1) (* x arg1))\n\n"), "{r}");
+        assert!(r.contains("(defun a () (scale 2))"), "{r}");
+        assert!(r.contains("(defun b () (scale 3))"), "{r}");
+    }
+
+    #[test]
+    fn extract_generalized_two_holes_with_supplied_names() {
+        // Two differing positions → two params; caller-supplied names are used.
+        let (_d, path) = write_temp(
+            "a.el",
+            "(defun a () (check :name \"no name\"))\n(defun b () (check :email \"no email\"))\n",
+        );
+        let out = extract_generalized(
+            &path,
+            &anchor_for("(check :name \"no name\")", 1),
+            &[anchor_for("(check :email \"no email\")", 2)],
+            "require",
+            &["key".into(), "msg".into()],
+            None,
+            Dialect::EmacsLisp,
+        )
+        .unwrap();
+        assert_eq!(out.sites, 2);
+        let r = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            r.starts_with("(defun require (key msg) (check key msg))\n\n"),
+            "{r}"
+        );
+        assert!(r.contains("(require :name \"no name\")"), "{r}");
+        assert!(r.contains("(require :email \"no email\")"), "{r}");
+    }
+
+    #[test]
+    fn extract_generalized_generalizes_whole_differing_subtrees() {
+        // The differing position is a *subtree* of unequal shape → captured whole.
+        let (_d, path) = write_temp("a.el", "(foo (g 1))\n(foo (h 2 3))\n");
+        let out = extract_generalized(
+            &path,
+            &anchor_for("(foo (g 1))", 1),
+            &[anchor_for("(foo (h 2 3))", 2)],
+            "w",
+            &[],
+            None,
+            Dialect::EmacsLisp,
+        )
+        .unwrap();
+        assert_eq!(out.sites, 2);
+        let r = std::fs::read_to_string(&path).unwrap();
+        assert!(r.starts_with("(defun w (arg1) (foo arg1))\n\n"), "{r}");
+        assert!(r.contains("(w (g 1))"), "{r}");
+        assert!(r.contains("(w (h 2 3))"), "{r}");
+    }
+
+    #[test]
+    fn extract_generalized_refuses_differing_operators() {
+        // Operators (list heads) are never generalized — differing heads refuse.
+        let (_d, path) = write_temp("a.el", "(foo x)\n(bar x)\n");
+        let before = std::fs::read_to_string(&path).unwrap();
+        assert!(matches!(
+            extract_generalized(
+                &path,
+                &anchor_for("(foo x)", 1),
+                &[anchor_for("(bar x)", 2)],
+                "g",
+                &[],
+                None,
+                Dialect::EmacsLisp,
+            ),
+            Err(ExtractError::NotGeneralizable(_))
+        ));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before); // no write
+    }
+
+    #[test]
+    fn extract_generalized_refuses_no_common_structure() {
+        // A list and an atom share no skeleton → refused, not aliased.
+        let (_d, path) = write_temp("a.el", "(foo x)\n99\n");
+        assert!(matches!(
+            extract_generalized(
+                &path,
+                &anchor_for("(foo x)", 1),
+                &[anchor_for("99", 2)],
+                "g",
+                &[],
+                None,
+                Dialect::EmacsLisp,
+            ),
+            Err(ExtractError::NotGeneralizable(_))
+        ));
+    }
+
+    #[test]
+    fn extract_generalized_refuses_param_count_mismatch() {
+        // One hole is inferred but two names are supplied → refused.
+        let (_d, path) = write_temp("a.el", "(defun a () (* x 2))\n(defun b () (* x 3))\n");
+        assert!(matches!(
+            extract_generalized(
+                &path,
+                &anchor_for("(* x 2)", 1),
+                &[anchor_for("(* x 3)", 2)],
+                "scale",
+                &["a".into(), "b".into()],
+                None,
+                Dialect::EmacsLisp,
+            ),
+            Err(ExtractError::NotGeneralizable(_))
+        ));
+    }
+
+    #[test]
+    fn extract_generalized_refuses_overlapping_sites() {
+        // The same anchor given twice → the sites overlap → refused (no partial write).
+        let (_d, path) = write_temp("a.el", "(g x)\n");
+        let a = anchor_for("(g x)", 1);
+        assert!(matches!(
+            extract_generalized(
+                &path,
+                &a,
+                std::slice::from_ref(&a),
+                "h",
+                &[],
+                None,
+                Dialect::EmacsLisp,
+            ),
+            Err(ExtractError::NotGeneralizable(_))
+        ));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "(g x)\n");
     }
 }

@@ -20,9 +20,9 @@ on CI's stable** (`rustup update stable`; currently rustc 1.96.1) or the Format 
 fails on version drift; CI's Docs step is `cargo doc --no-deps` with
 `RUSTDOCFLAGS=-D warnings` (no public doc linking to a private item).
 
-**Quality gate (all green):** 142 tests, `cargo fmt --check`,
+**Quality gate (all green):** 149 tests, `cargo fmt --check`,
 `clippy --all-targets`, `RUSTDOCFLAGS=-D warnings cargo doc --no-deps`; tree clean.
-37 ADRs.
+38 ADRs.
 
 **Gotchas.**
 - A committed **PostToolUse hook** (`.claude/settings.json`, force-tracked past the
@@ -39,15 +39,40 @@ fails on version drift; CI's Docs step is `cargo doc --no-deps` with
 (rewrite pattern language + `CONTEXT.md` vocabulary + `docs/rewrite.md` cookbook),
 ADR-0034 (extract). Per-member detail below.
 
-**Candidate next work:** (a) remaining `extract` opt-ins — free-var inference /
-anti-unification (crosses the ADR-0003 ceiling; weigh carefully), multi-*file*
-extraction (block `anchor+count` **done**, ADR-0035; non-`defun` kinds **done**,
-ADR-0036; multi-site within a file **done**, ADR-0037); (b) formatter
+**Candidate next work:** (a) remaining `extract` opt-ins — free-var **inference**
+(binding analysis; still crosses the ADR-0003 ceiling), skeleton auto-discovery for
+`--also`, multi-*file* extraction, `--also` over sibling runs (block `anchor+count`
+**done**, ADR-0035; non-`defun` kinds **done**, ADR-0036; identical multi-site
+**done**, ADR-0037; generalizing multi-site / anti-unification **done**, ADR-0038);
+(b) formatter
 long tail / native indenters for non-bundled dialects (Deferred list below);
 (c) move `calculate-lisp-indent` into `lispexp-emacs`
 (`docs/notes/20260704-delegation-boundary-review.md`).
 
 ## Now
+
+- **`extract --also` (generalizing multi-site / anti-unification) landed**
+  (ADR-0038) — `extract` gains a repeatable `--also ANCHOR` (MCP `also: []`): the
+  primary anchor plus every `--also` site are **anti-unified** — their common
+  skeleton becomes the function body, each position where they diverge becomes an
+  inferred parameter, and each site calls with its own sub-terms. Example: `(* x 2)`
+  + `(* x 3)` → `(defun scale (arg1) (* x arg1))`, calls `(scale 2)` / `(scale 3)`.
+  **Explicit sites, no discovery** — the safe choice for the first `extract` that
+  *infers* structure (anti-unification's param count grows with site heterogeneity,
+  so precise site selection keeps output clean). **Standard AU, list-structured:**
+  recurse through co-structured lists (same delim+arity), keep the operator fixed,
+  parameterize the first divergence (leaf or whole subtree). Refusals
+  (`NotGeneralizable`, no write): differing operators (never generalize a list
+  head), no common skeleton, differing improper-list tails, or a param-count
+  mismatch. **Ceiling held, not crossed deeper** — AU generalizes *only what
+  differs*; a symbol common to every site (a free local like `x` above) is baked in
+  unchanged, exactly as single-site extract; **no binding analysis** (free-var
+  *inference* still deferred). Params are generated `arg1..` (collision-free) or
+  caller-named. `--also` is a distinct site mode: combining with `--all` or `--count
+  >1` is refused. `extract_generalized` + `anti_unify` in `src/refactor.rs`; all
+  three site paths (single / identical-multi / generalizing) share the
+  `finish_extraction` tail (now per-site call text). 149 tests. Deferred: free-var
+  inference, skeleton auto-discovery, `--also` over runs, non-linear hole merging.
 
 - **`extract --all` (multi-site) landed** (ADR-0037) — `extract` gains an optional
   `--all` flag (MCP `all`): extract **every occurrence structurally equal to the
