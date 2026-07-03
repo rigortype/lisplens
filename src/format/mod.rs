@@ -1,11 +1,11 @@
 //! Native Lisp indentation — Rust ports of the indenters Emacs bundles
 //! (ADR-0011, ADR-0026). A shared driver (line loop, string/comment rules,
-//! touched-region masking, [`Cols`] column arithmetic, rendering) walks the file
+//! touched-region masking, `Cols` column arithmetic, rendering) walks the file
 //! and, per code line, asks a dialect-specific *engine* for the indent column.
 //!
 //! Emacs ships three distinct Lisp indenters; each is one engine here (see
-//! [`Engine`]): `lisp-indent-function` for Emacs Lisp (this module) and
-//! `common-lisp-indent-function` for Common Lisp ([`commonlisp`]). The Emacs
+//! `Engine`): `lisp-indent-function` for Emacs Lisp (this module) and
+//! `common-lisp-indent-function` for Common Lisp (`commonlisp`). The Emacs
 //! Lisp engine also serves as the generic fallback for dialects without a
 //! dedicated engine yet.
 //!
@@ -154,7 +154,7 @@ fn display_width(s: &str) -> usize {
 }
 
 /// Reindent whole `source` for `dialect`, returning the formatted text. The
-/// engine is chosen by [`engine_for`]; leading whitespace on each line is
+/// engine is chosen by `engine_for`; leading whitespace on each line is
 /// recomputed while tokens and line order are untouched, so this never changes
 /// what the file parses to.
 pub fn format(source: &str, config: &FormatConfig, dialect: Dialect) -> String {
