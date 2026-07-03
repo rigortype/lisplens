@@ -268,7 +268,23 @@ fn push_containers<'a, 't>(
                     *reader_cond = wrapped_by_reader_cond;
                     push_containers(items, offset, false, stack, reader_cond);
                 }
-                DatumKind::Prefixed { prefix, inner, .. } => {
+                DatumKind::Prefixed {
+                    prefix, inner, arg, ..
+                } => {
+                    // Metadata `^{…} form` holds the map in `arg`; descend it when it
+                    // contains `offset` (else the applied form in `inner`).
+                    if let Some(a) = arg {
+                        if (a.span.start as usize) < offset && offset < (a.span.end as usize) {
+                            push_containers(
+                                std::slice::from_ref(a),
+                                offset,
+                                false,
+                                stack,
+                                reader_cond,
+                            );
+                            return;
+                        }
+                    }
                     // A reader conditional `#?(…)` / `#?@(…)` is a `Prefixed`; its
                     // inner list is data (align under the first element), not a call.
                     let is_rc = matches!(prefix, lispexp::Prefix::ReaderConditional { .. });
@@ -513,6 +529,24 @@ coll)
      coll)
 #?(:clj a
    :cljs b)";
+        assert_eq!(fmt(input), want, "\n{}", fmt(input));
+    }
+
+    #[test]
+    fn metadata_map_and_docstring_interior() {
+        // A `^{…}` metadata map aligns its keys under the first key (the map is in
+        // the `Prefixed` node's `arg`); a multi-line docstring *inside* the metadata
+        // stays untouched string interior. Regression for the real-corpus finds.
+        let input = "\
+(def ^{:doc \"one
+  See: x.\"
+:deprecated \"1.1\"}
+name 1)";
+        let want = "\
+(def ^{:doc \"one
+  See: x.\"
+       :deprecated \"1.1\"}
+  name 1)";
         assert_eq!(fmt(input), want, "\n{}", fmt(input));
     }
 

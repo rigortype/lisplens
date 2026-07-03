@@ -445,7 +445,15 @@ pub(super) fn container_at<'a, 't>(data: &'a [Datum<'t>], offset: usize) -> Opti
                     }
                     Some(d)
                 }
-                DatumKind::Prefixed { inner, .. } => {
+                DatumKind::Prefixed { inner, arg, .. } => {
+                    // Metadata `^{…} form` (Clojure) puts the metadata map in `arg`;
+                    // a line inside it is contained there, not in `inner` (the form
+                    // the metadata applies to). Descend whichever holds `offset`.
+                    if let Some(a) = arg {
+                        if (a.span.start as usize) < offset && offset < (a.span.end as usize) {
+                            return container_at(std::slice::from_ref(a), offset);
+                        }
+                    }
                     container_at(std::slice::from_ref(inner), offset)
                 }
                 // A `#(…)`/`#u8(…)` reader-macro form wraps a list; its inner
@@ -481,7 +489,18 @@ fn in_string(data: &[Datum], offset: usize) -> bool {
                             .as_ref()
                             .is_some_and(|t| in_string(std::slice::from_ref(t), offset))
                 }
-                DatumKind::Prefixed { inner, .. } => in_string(std::slice::from_ref(inner), offset),
+                DatumKind::Prefixed { inner, arg, .. } => {
+                    // Metadata `^{…} form` puts a (possibly multi-line-string-bearing)
+                    // map in `arg`; check it too, so a docstring inside metadata is
+                    // recognized as string interior and left untouched.
+                    in_string(std::slice::from_ref(inner), offset)
+                        || arg
+                            .as_ref()
+                            .is_some_and(|a| in_string(std::slice::from_ref(a), offset))
+                }
+                DatumKind::HashLiteral {
+                    inner: Some(inner), ..
+                } => in_string(std::slice::from_ref(inner), offset),
                 _ => false,
             };
         }
