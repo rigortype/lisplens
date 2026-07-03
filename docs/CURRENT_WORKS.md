@@ -12,11 +12,11 @@ Codebase): `docs/dev/architecture.md`, `docs/dev/formatter.md`, `CONTEXT.md`,
   publishes (`.github/workflows/release.yml`); next bump via the
   `lisplens-release-prep` skill. No pinned MSRV (binary tool; deps track recent
   stable Rust).
-- **Consuming `lispexp-emacs` 0.1** (on `lispexp` 0.6): the bundled indent table
-  and the file-local / dir-local **parsers** moved out of lisplens into the
-  companion crate (lispexp ADR-0033, lisplens commit `02a293a`) — table verified
-  byte-identical, −78 net lines, behavior unchanged. **Unreleased**: ship it as
-  0.1.1 (internal-only change) via the release skill when ready.
+- **Released 0.1.1** (2026-07-04) — a dependency-only release consuming
+  `lispexp-emacs` 0.1 (on `lispexp` 0.6): the bundled indent table and the
+  file-local / dir-local **parsers** moved out of lisplens into the companion
+  crate (lispexp ADR-0033, commit `02a293a`) — table verified byte-identical,
+  −78 net lines, output unchanged. On crates.io + GitHub Release binaries.
 - **Delegation boundary reviewed** (`docs/notes/20260704-delegation-boundary-review.md`):
   the current split (lispexp-emacs = Emacs *data + parsers*) is right but
   incomplete — the highest-reuse Emacs *behavior*, the `calculate-lisp-indent`
