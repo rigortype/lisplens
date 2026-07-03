@@ -1188,6 +1188,9 @@ pub fn rewrite_in_file(
 pub struct ExtractOutcome {
     /// The file hash after the extraction, over the reindented content.
     pub new_file_hash: String,
+    /// How many occurrences were replaced by a call — 1 for single-site
+    /// extraction, the count of structurally-equal sites for `--all` (ADR-0037).
+    pub sites: usize,
 }
 
 /// Why an extraction was refused. No partial write ever happens on an error.
@@ -1272,32 +1275,105 @@ pub fn extract_block_into_function(
     let located = crate::resolve::resolve(&source, &parsed.data, &anchor_val)
         .ok_or_else(|| ExtractError::AnchorNotFound(anchor.into()))?;
     let sel = run_span(&parsed.data, &located, count)?;
-
-    // The enclosing top-level form (the def is inserted just before it); falls
-    // back to the selection itself when the form is already top-level.
-    let encl_start = parsed
-        .data
-        .iter()
-        .find(|d| (d.span.start as usize) <= sel.start && sel.end <= (d.span.end as usize))
-        .map_or(sel.start, |d| d.span.start as usize);
+    let encl_start = enclosing_top_level(&parsed.data, &sel);
 
     let body = &source[sel.clone()];
     let def = def_form(dialect, name, params, body, kind)
         .ok_or_else(|| ExtractError::UnsupportedDialect(format!("{dialect:?}")))?;
     let call = call_form(name, params);
+    finish_extraction(
+        path,
+        &source,
+        &options,
+        dialect,
+        &def,
+        encl_start,
+        &[sel],
+        &call,
+    )
+}
 
-    let edits = vec![
-        Edit {
-            range: encl_start..encl_start,
-            text: format!("{def}\n\n"),
-        },
-        Edit {
-            range: sel,
-            text: call,
-        },
-    ];
+/// Extract **every occurrence structurally equal to the anchored selection** into
+/// one new function `name`, replacing each with the call `(name params…)`
+/// (ADR-0037, the `--all` opt-in). "The same" is `struct_eq` (formatting-modulo
+/// structural equality, as `rewrite`): for `count == 1` a site is any node in the
+/// tree; for `count > 1` a site is any window of `count` contiguous siblings equal
+/// to the anchored run. The def is inserted once, before the earliest site's
+/// enclosing top-level form. Sites do not generalize — every occurrence is
+/// identical *including* its arguments, so the same `(name params…)` call replaces
+/// each; `params` name the def's formals but introduce no per-site variation (the
+/// ADR-0003 ceiling — anti-unification is deferred). A form that appears once
+/// degrades to plain single-site extraction. Unsupported dialects are refused.
+pub fn extract_multi_site(
+    path: &Path,
+    anchor: &str,
+    name: &str,
+    params: &[String],
+    count: usize,
+    kind: Option<&str>,
+    dialect: Dialect,
+) -> Result<ExtractOutcome, ExtractError> {
+    let source = std::fs::read_to_string(path).map_err(ExtractError::Io)?;
+    let options = Options::for_dialect(dialect);
+    let parsed = parse(&source, &options);
+
+    let anchor_val = parse_anchor(anchor).ok_or_else(|| ExtractError::BadAnchor(anchor.into()))?;
+    let located = crate::resolve::resolve(&source, &parsed.data, &anchor_val)
+        .ok_or_else(|| ExtractError::AnchorNotFound(anchor.into()))?;
+    let pattern = run_datums(&parsed.data, &located, count)?;
+    let anchored = pattern[0].span.start as usize..pattern[pattern.len() - 1].span.end as usize;
+
+    // All sites are structurally equal, so build the def from the anchored text.
+    let body = &source[anchored];
+    let def = def_form(dialect, name, params, body, kind)
+        .ok_or_else(|| ExtractError::UnsupportedDialect(format!("{dialect:?}")))?;
+    let call = call_form(name, params);
+
+    // Every structurally-equal, non-overlapping occurrence; the anchored run is
+    // always among them, so `sites` is non-empty and ascending.
+    let sites = keep_outermost_spans(collect_struct_sites(&pattern, &parsed.data));
+    let def_before = enclosing_top_level(&parsed.data, &sites[0]);
+    finish_extraction(
+        path, &source, &options, dialect, &def, def_before, &sites, &call,
+    )
+}
+
+/// Byte offset of the top-level form enclosing `span` (its start), or `span.start`
+/// when the span is itself top-level — where the extracted def is inserted.
+fn enclosing_top_level(data: &[Datum], span: &Range<usize>) -> usize {
+    data.iter()
+        .find(|d| (d.span.start as usize) <= span.start && span.end <= (d.span.end as usize))
+        .map_or(span.start, |d| d.span.start as usize)
+}
+
+/// Insert `def_text` before `def_before`, replace every `site` span with `call`,
+/// then reindent the touched forms (native engines), validate, and write
+/// atomically. The shared tail of single- and multi-site extraction. `sites` must
+/// be non-overlapping and ascending, with `def_before <= sites[0].start`.
+#[allow(clippy::too_many_arguments)]
+fn finish_extraction(
+    path: &Path,
+    source: &str,
+    options: &Options,
+    dialect: Dialect,
+    def_text: &str,
+    def_before: usize,
+    sites: &[Range<usize>],
+    call: &str,
+) -> Result<ExtractOutcome, ExtractError> {
+    let mut edits = Vec::with_capacity(sites.len() + 1);
+    edits.push(Edit {
+        range: def_before..def_before,
+        text: format!("{def_text}\n\n"),
+    });
+    for s in sites {
+        edits.push(Edit {
+            range: s.clone(),
+            text: call.to_string(),
+        });
+    }
     let expected = file_hash(source.as_bytes());
-    let (spliced, spans) = splice_tracked(&source, edits).map_err(ExtractError::Splice)?;
+    let (spliced, spans) = splice_tracked(source, edits).map_err(ExtractError::Splice)?;
     let new_content = if has_native_engine(dialect) {
         let config = crate::config::resolve(path, &spliced);
         reindent(
@@ -1313,23 +1389,108 @@ pub fn extract_block_into_function(
     } else {
         spliced
     };
-    verify_and_write(path, &expected, &new_content, &options).map_err(ExtractError::Write)?;
+    verify_and_write(path, &expected, &new_content, options).map_err(ExtractError::Write)?;
     Ok(ExtractOutcome {
         new_file_hash: file_hash(new_content.as_bytes()),
+        sites: sites.len(),
     })
 }
 
+/// Every span structurally equal to the `pattern` run (ADR-0037). A single-datum
+/// pattern matches any node anywhere (whole-tree walk); a multi-datum pattern
+/// matches any window of contiguous siblings, in any sibling group at any depth.
+fn collect_struct_sites(pattern: &[&Datum], data: &[Datum]) -> Vec<Range<usize>> {
+    let n = pattern.len();
+    let mut spans = Vec::new();
+    if n == 1 {
+        for_each_node(data, &mut |node| {
+            if struct_eq(node, pattern[0]) {
+                spans.push(span_of(node));
+            }
+        });
+    } else {
+        for_each_sibling_group(data, &mut |group| {
+            if group.len() < n {
+                return;
+            }
+            for w in 0..=group.len() - n {
+                if (0..n).all(|k| struct_eq(&group[w + k], pattern[k])) {
+                    spans.push(group[w].span.start as usize..group[w + n - 1].span.end as usize);
+                }
+            }
+        });
+    }
+    spans
+}
+
+/// Keep only the outermost, non-overlapping spans (splice cannot overlap; the span
+/// form of [`keep_outermost`]). Sorted ascending on return.
+fn keep_outermost_spans(mut spans: Vec<Range<usize>>) -> Vec<Range<usize>> {
+    spans.sort_by_key(|s| (s.start, std::cmp::Reverse(s.end)));
+    let mut kept: Vec<Range<usize>> = Vec::new();
+    let mut covered = 0usize;
+    for s in spans {
+        if s.start >= covered {
+            covered = s.end;
+            kept.push(s);
+        }
+    }
+    kept
+}
+
+/// Visit every sibling group in the tree: the top-level `data`, then each list's
+/// `items`, recursively (the sequences a run of siblings can live in). Mirrors
+/// [`for_each_node`]'s descent but yields the item slices, not the nodes.
+fn for_each_sibling_group<'t>(data: &'t [Datum<'t>], f: &mut impl FnMut(&'t [Datum<'t>])) {
+    f(data);
+    for d in data {
+        match &d.kind {
+            DatumKind::List { items, tail, .. } => {
+                for_each_sibling_group(items, f);
+                if let Some(t) = tail {
+                    for_each_sibling_group(std::slice::from_ref(t), f);
+                }
+            }
+            DatumKind::Prefixed { inner, arg, .. } => {
+                for_each_sibling_group(std::slice::from_ref(inner), f);
+                if let Some(a) = arg {
+                    for_each_sibling_group(std::slice::from_ref(a), f);
+                }
+            }
+            DatumKind::HashLiteral {
+                inner: Some(inner), ..
+            } => for_each_sibling_group(std::slice::from_ref(inner), f),
+            DatumKind::Label { inner, .. } => {
+                for_each_sibling_group(std::slice::from_ref(inner), f)
+            }
+            _ => {}
+        }
+    }
+}
+
 /// The source span of the run of `count` contiguous sibling forms starting at the
-/// located node (ADR-0035). `count == 1` returns exactly the node's own span (the
-/// ADR-0034 single-form case). The sibling group is the anchored form's parent list
-/// items, or the top-level `data` when the anchor is a top-level form; the run is
-/// `siblings[index .. index + count]`. Errors if `count == 0` or the run would cross
-/// the sibling group's end — no partial write can follow.
+/// located node (ADR-0035): the [`run_datums`] range, `first.start .. last.end`.
 fn run_span(
     data: &[Datum],
     located: &crate::resolve::Located,
     count: usize,
 ) -> Result<Range<usize>, ExtractError> {
+    let run = run_datums(data, located, count)?;
+    Ok(run[0].span.start as usize..run[run.len() - 1].span.end as usize)
+}
+
+/// The `count` contiguous sibling **datums** starting at the located node — the
+/// datum form of [`run_span`], used by multi-site extraction to compare structure
+/// (ADR-0037). `count == 1` is the node itself (the ADR-0034 single-form case). The
+/// sibling group is the anchored form's parent list items, or the top-level `data`
+/// when the anchor is a top-level form; the run is `siblings[index .. index +
+/// count]`. Errors if `count == 0` or the run would cross the sibling group's end —
+/// no partial write can follow.
+fn run_datums<'a, 't>(
+    data: &'a [Datum<'t>],
+    located: &crate::resolve::Located<'a, 't>,
+    count: usize,
+) -> Result<Vec<&'a Datum<'t>>, ExtractError> {
     if count == 0 {
         return Err(ExtractError::RunExceedsSiblings {
             asked: 0,
@@ -1337,9 +1498,9 @@ fn run_span(
         });
     }
     if count == 1 {
-        return Ok(span_of(located.node));
+        return Ok(vec![located.node]);
     }
-    let siblings: &[Datum] = match located.parent {
+    let siblings: &'a [Datum<'t>] = match located.parent {
         Some(p) => match &p.kind {
             DatumKind::List { items, .. } => items,
             _ => std::slice::from_ref(located.node),
@@ -1354,9 +1515,7 @@ fn run_span(
             available,
         });
     }
-    let first = &siblings[idx];
-    let last = &siblings[idx + count - 1];
-    Ok(first.span.start as usize..last.span.end as usize)
+    Ok(siblings[idx..idx + count].iter().collect())
 }
 
 /// Parse a `line:hash[:ordinal]` anchor string.
@@ -1974,5 +2133,131 @@ mod tests {
             ),
             Err(ExtractError::UnsupportedDialect(_))
         ));
+    }
+
+    // ----- multi-site extraction via `--all` (ADR-0037) -----
+
+    #[test]
+    fn extract_multi_site_replaces_every_equal_occurrence() {
+        // `(log)` occurs three times — a body sibling, and a *subterm* of `(when x
+        // …)` in another defun — all structurally equal, so `--all` replaces every
+        // one with the call and hoists one niladic helper before the earliest.
+        let (_d, path) = write_temp(
+            "a.el",
+            "(defun a ()\n  (log)\n  (work))\n\n(defun b ()\n  (when x (log)))\n",
+        );
+        let out = extract_multi_site(
+            &path,
+            &anchor_for("(log)", 2),
+            "record",
+            &[],
+            1,
+            None,
+            Dialect::EmacsLisp,
+        )
+        .unwrap();
+        assert_eq!(out.sites, 2);
+        let r = std::fs::read_to_string(&path).unwrap();
+        assert!(r.starts_with("(defun record () (log))\n\n"), "{r}");
+        assert_eq!(r.matches("(record)").count(), 2, "{r}");
+        assert_eq!(r.matches("(log)").count(), 1, "{r}"); // only inside the def
+        assert!(r.contains("(when x (record))"), "{r}");
+    }
+
+    #[test]
+    fn extract_multi_site_of_a_block() {
+        // A run of two siblings `(foo) (bar)` repeated in two defuns → one helper,
+        // each run replaced by a single call (`--all` composed with `--count 2`).
+        let (_d, path) = write_temp(
+            "a.el",
+            "(defun a ()\n  (foo)\n  (bar)\n  (rest-a))\n\n\
+             (defun b ()\n  (foo)\n  (bar)\n  (rest-b))\n",
+        );
+        let out = extract_multi_site(
+            &path,
+            &anchor_for("(foo)", 2),
+            "setup",
+            &[],
+            2,
+            None,
+            Dialect::EmacsLisp,
+        )
+        .unwrap();
+        assert_eq!(out.sites, 2);
+        let r = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            r.starts_with("(defun setup ()\n  (foo)\n  (bar))\n\n"),
+            "{r}"
+        );
+        assert_eq!(r.matches("(setup)").count(), 2, "{r}");
+        assert_eq!(r.matches("(foo)").count(), 1, "{r}");
+        assert_eq!(r.matches("(bar)").count(), 1, "{r}");
+        assert!(r.contains("(rest-a)") && r.contains("(rest-b)"), "{r}");
+    }
+
+    #[test]
+    fn extract_multi_site_composes_with_kind() {
+        // `--all` and `--kind` are orthogonal: every site is replaced and the emitted
+        // head is the requested `defsubst`.
+        let (_d, path) = write_temp("a.el", "(defun a () (ping))\n(defun b () (ping))\n");
+        let out = extract_multi_site(
+            &path,
+            &anchor_for("(ping)", 1),
+            "p",
+            &[],
+            1,
+            Some("defsubst"),
+            Dialect::EmacsLisp,
+        )
+        .unwrap();
+        assert_eq!(out.sites, 2);
+        let r = std::fs::read_to_string(&path).unwrap();
+        assert!(r.starts_with("(defsubst p () (ping))\n\n"), "{r}");
+        assert_eq!(r.matches("(p)").count(), 2, "{r}");
+    }
+
+    #[test]
+    fn extract_multi_site_single_occurrence_degrades() {
+        // A form that appears once is just single-site extraction, sites == 1.
+        let (_d, path) = write_temp("a.el", "(defun a () (only))\n");
+        let out = extract_multi_site(
+            &path,
+            &anchor_for("(only)", 1),
+            "h",
+            &[],
+            1,
+            None,
+            Dialect::EmacsLisp,
+        )
+        .unwrap();
+        assert_eq!(out.sites, 1);
+        let r = std::fs::read_to_string(&path).unwrap();
+        assert!(r.starts_with("(defun h () (only))\n\n"), "{r}");
+        assert!(r.contains("(defun a () (h))"), "{r}");
+    }
+
+    #[test]
+    fn extract_multi_site_block_overlap_keeps_outermost() {
+        // Three identical `(tick)` siblings and a run of 2: the two candidate windows
+        // overlap, so only the first is taken (the third `(tick)` stays).
+        let (_d, path) = write_temp("a.el", "(defun a ()\n  (tick)\n  (tick)\n  (tick))\n");
+        let out = extract_multi_site(
+            &path,
+            &anchor_for("(tick)", 2),
+            "twice",
+            &[],
+            2,
+            None,
+            Dialect::EmacsLisp,
+        )
+        .unwrap();
+        assert_eq!(out.sites, 1);
+        let r = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            r.starts_with("(defun twice ()\n  (tick)\n  (tick))\n\n"),
+            "{r}"
+        );
+        // One call replaces the first two; the third `(tick)` is untouched.
+        assert!(r.contains("(defun a ()\n  (twice)\n  (tick))"), "{r}");
     }
 }

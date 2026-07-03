@@ -20,9 +20,9 @@ on CI's stable** (`rustup update stable`; currently rustc 1.96.1) or the Format 
 fails on version drift; CI's Docs step is `cargo doc --no-deps` with
 `RUSTDOCFLAGS=-D warnings` (no public doc linking to a private item).
 
-**Quality gate (all green):** 137 tests, `cargo fmt --check`,
+**Quality gate (all green):** 142 tests, `cargo fmt --check`,
 `clippy --all-targets`, `RUSTDOCFLAGS=-D warnings cargo doc --no-deps`; tree clean.
-36 ADRs.
+37 ADRs.
 
 **Gotchas.**
 - A committed **PostToolUse hook** (`.claude/settings.json`, force-tracked past the
@@ -39,15 +39,33 @@ fails on version drift; CI's Docs step is `cargo doc --no-deps` with
 (rewrite pattern language + `CONTEXT.md` vocabulary + `docs/rewrite.md` cookbook),
 ADR-0034 (extract). Per-member detail below.
 
-**Candidate next work:** (a) remaining `extract` opt-ins — free-var inference
-(crosses the ADR-0003 ceiling; weigh carefully), multi-site extraction (block
-`anchor+count` extraction is **done**, ADR-0035; non-`defun` kinds are **done**,
-ADR-0036); (b) formatter
+**Candidate next work:** (a) remaining `extract` opt-ins — free-var inference /
+anti-unification (crosses the ADR-0003 ceiling; weigh carefully), multi-*file*
+extraction (block `anchor+count` **done**, ADR-0035; non-`defun` kinds **done**,
+ADR-0036; multi-site within a file **done**, ADR-0037); (b) formatter
 long tail / native indenters for non-bundled dialects (Deferred list below);
 (c) move `calculate-lisp-indent` into `lispexp-emacs`
 (`docs/notes/20260704-delegation-boundary-review.md`).
 
 ## Now
+
+- **`extract --all` (multi-site) landed** (ADR-0037) — `extract` gains an optional
+  `--all` flag (MCP `all`): extract **every occurrence structurally equal to the
+  anchored selection** into one new function, replacing each with the call. "The
+  same" is `struct_eq` (formatting-modulo structural equality, the same relation
+  `rewrite` uses). For `count == 1` a site is any node anywhere (whole-tree
+  `for_each_node` walk, so it catches subterms, not just siblings); for `count > 1`
+  a site is any **window of N contiguous siblings** equal to the anchored run
+  (`for_each_sibling_group` sliding window). Overlapping candidate windows keep the
+  outermost (`keep_outermost_spans`). The def is inserted once, before the earliest
+  site's enclosing top-level form. **No generalization** — sites must be identical
+  *including* arguments, so the same `(NAME PARAMS)` replaces each; anti-unification
+  (sites differing in an argument) stays deferred as the move that actually crosses
+  the ADR-0003 ceiling. Composes with `--count` and `--kind` (orthogonal knobs). A
+  form appearing once degrades to single-site extract; `ExtractOutcome.sites` now
+  reports the count. `extract_multi_site` in `src/refactor.rs`; single- and
+  multi-site share a `finish_extraction` splice/reindent/validate tail. 142 tests.
+  Deferred: free-var inference / anti-unification, multi-*file* extraction.
 
 - **`extract --kind` landed** (ADR-0036) — `extract` gains an optional
   `--kind HEAD` (MCP `kind`) that names the leading operator of the emitted

@@ -250,24 +250,32 @@ fn run_rewrite(path: PathBuf) -> ExitCode {
 
 fn run_extract(path: PathBuf, anchor: &str, name: &str, args: &[&str]) -> ExitCode {
     let dialect = lisplens::dialect_for_path(&path);
-    let (count, kind, params) = match parse_extract_opts(args) {
-        Ok(triple) => triple,
+    let opts = match parse_extract_opts(args) {
+        Ok(opts) => opts,
         Err(msg) => {
             eprintln!("lisplens: extract: {msg}");
             return ExitCode::FAILURE;
         }
     };
-    match lisplens::refactor::extract_block_into_function(
+    let extract = if opts.all {
+        lisplens::refactor::extract_multi_site
+    } else {
+        lisplens::refactor::extract_block_into_function
+    };
+    match extract(
         &path,
         anchor,
         name,
-        &params,
-        count,
-        kind.as_deref(),
+        &opts.params,
+        opts.count,
+        opts.kind.as_deref(),
         dialect,
     ) {
         Ok(outcome) => {
-            println!("extracted `{name}`  {}", outcome.new_file_hash);
+            println!(
+                "extracted `{name}` at {} site(s)  {}",
+                outcome.sites, outcome.new_file_hash
+            );
             ExitCode::SUCCESS
         }
         Err(err) => {
@@ -277,13 +285,22 @@ fn run_extract(path: PathBuf, anchor: &str, name: &str, args: &[&str]) -> ExitCo
     }
 }
 
-/// Split `--count N` / `--count=N` (default 1) and `--kind HEAD` / `--kind=HEAD`
-/// (default: dialect's defun/define/defn) out of `extract`'s trailing args;
-/// everything else is a parameter symbol. Params are Lisp symbols, so none begins
-/// with `--`, so this never swallows a real parameter.
-fn parse_extract_opts(args: &[&str]) -> Result<(usize, Option<String>, Vec<String>), String> {
+/// The parsed `extract` options.
+struct ExtractOpts {
+    count: usize,
+    kind: Option<String>,
+    all: bool,
+    params: Vec<String>,
+}
+
+/// Split `--count N` / `--count=N` (default 1), `--kind HEAD` / `--kind=HEAD`
+/// (default: dialect's defun/define/defn), and `--all` (default off) out of
+/// `extract`'s trailing args; everything else is a parameter symbol. Params are
+/// Lisp symbols, so none begins with `--`, so this never swallows a real parameter.
+fn parse_extract_opts(args: &[&str]) -> Result<ExtractOpts, String> {
     let mut count = 1usize;
     let mut kind = None;
+    let mut all = false;
     let mut params = Vec::new();
     let mut i = 0;
     while i < args.len() {
@@ -304,12 +321,19 @@ fn parse_extract_opts(args: &[&str]) -> Result<(usize, Option<String>, Vec<Strin
                 .ok_or_else(|| "--kind needs a value".to_string())?;
             kind = Some(h.to_string());
             i += 1;
+        } else if a == "--all" {
+            all = true;
         } else {
             params.push(a.to_string());
         }
         i += 1;
     }
-    Ok((count, kind, params))
+    Ok(ExtractOpts {
+        count,
+        kind,
+        all,
+        params,
+    })
 }
 
 fn run_find(name: &str, dir: &str) -> ExitCode {
@@ -360,7 +384,7 @@ fn usage() -> ExitCode {
         "  lisplens rewrite <file>       structural pattern->template rewrite (spec on stdin)"
     );
     eprintln!(
-        "  lisplens extract <file> <anchor> <name> [param...] [--count N] [--kind HEAD]  pull a form (or a run of N) into a new function"
+        "  lisplens extract <file> <anchor> <name> [param...] [--count N] [--kind HEAD] [--all]  pull a form (or a run of N) into a new function"
     );
     eprintln!("  lisplens mcp                  run the MCP server over stdio");
     eprintln!();
