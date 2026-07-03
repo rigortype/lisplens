@@ -52,14 +52,21 @@ nested code.
 
 ## Indent specs
 
-Standard specs are **bundled** in `NUMBER_SPECS` / `DEFUN_SPECS` in
-`src/format.rs` (342 entries — 326 core + 16 from `cc-mode` et al., see below).
-File-local `(declare (indent …))` and
-`(put 'sym 'lisp-indent-function …)` are layered on via lispexp
-`harvest_indent_specs`. Rendering uses `FormatConfig` (spaces, or tabs +
-trailing spaces).
+Standard specs are **bundled** by the companion crate
+`lispexp_emacs::indent::bundled_table(Dialect::EmacsLisp)` (lispexp ADR-0033) — 342
+entries (326 core + 16 from `cc-mode` et al., see below), the byte-identical
+former `NUMBER_SPECS` / `DEFUN_SPECS` tables lisplens used to carry in
+`src/format.rs`. The formatter starts from that table; file-local
+`(declare (indent …))` and `(put 'sym 'lisp-indent-function …)` are layered on
+via lispexp `harvest_indent_specs`. Rendering uses `FormatConfig` (spaces, or
+tabs + trailing spaces).
 
 ### Regenerating the bundled table (Emacs is the source of truth)
+
+The table now lives in `lispexp-emacs` (`crates/lispexp-emacs/src/indent.rs`),
+so regeneration is a change to *that* crate, not lisplens — the dump procedure
+below is reproduced here for reference and is identical to the one documented in
+its `indent` module.
 
 `emacs -Q --batch --load dump.el`:
 

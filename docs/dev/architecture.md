@@ -21,8 +21,8 @@ content-hash **anchor** for any target, and edit by anchor.
 | `apply` | end-to-end: read→drift→splice→verify_and_write (`apply_*_to_file`) |
 | `patch` | Line-hash + Structural **patch DSL** parse/apply; `Outcome{new_file_hash, warnings}` (ADR-0021) |
 | `search` | `find_definitions` / `find_symbol` (code-vs-data via lispexp `walk`) + text renderers (ADR-0010) |
-| `config` | resolve `indent-tabs-mode`/`tab-width` from file-local/dir-locals/EditorConfig (ADR-0029) |
-| `format` | native Emacs Lisp indenter — see `formatter.md` (ADR-0011/0025-0028) |
+| `config` | resolve `indent-tabs-mode`/`tab-width` from file-local/dir-locals/EditorConfig (ADR-0029); file-local + dir-local *parsing* delegated to `lispexp_emacs::{local_vars,dir_locals}` (lispexp ADR-0033), EditorConfig stays in-tree |
+| `format` | native Emacs Lisp indenter — see `formatter.md`; bundled indent table from `lispexp_emacs::indent::bundled_table` (ADR-0011/0025-0028; crate split lispexp ADR-0033) |
 | `mcp` | minimal stdio JSON-RPC MCP server (ADR-0020) |
 | `lib` | Lens: `outline`/`expand` (+ `_text`), `dialect_for_path`/`recognized_dialect`, `disappeared_definitions`; re-exports `Dialect` |
 | `main` | CLI dispatch |

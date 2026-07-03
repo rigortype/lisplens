@@ -5,7 +5,8 @@
 
 use std::path::Path;
 
-use lispexp::{Datum, DatumKind, Options};
+use lispexp_emacs::dir_locals::DirLocals;
+use lispexp_emacs::local_vars::file_locals;
 
 /// Formatting parameters resolved for a file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,59 +85,14 @@ fn set_var(cfg: &mut FormatConfig, var: &str, val: &str) {
 
 // --- File-local variables (ADR-0029 #1) ------------------------------------
 
+/// Read the file-local variables — the `-*- … -*-` header cookie and the
+/// trailing `Local Variables:` block — via `lispexp_emacs::local_vars`, and
+/// interpret each binding into the config (last-wins, so the crate's application
+/// order is preserved by feeding bindings in `.iter()` order).
 fn apply_file_locals(source: &str, cfg: &mut FormatConfig) {
-    apply_header(source, cfg);
-    apply_footer(source, cfg);
-}
-
-/// The `-*- … -*-` line: the first line, or the second if the first is a
-/// shebang. Only the `var: val; …` form carries variables.
-fn apply_header(source: &str, cfg: &mut FormatConfig) {
-    let mut lines = source.lines();
-    let first = lines.next().unwrap_or_default();
-    let header = if first.starts_with("#!") {
-        lines.next().unwrap_or_default()
-    } else {
-        first
-    };
-    let Some(inner) = between(header, "-*-", "-*-") else {
-        return;
-    };
-    if inner.contains(':') {
-        for part in inner.split(';') {
-            if let Some((k, v)) = part.split_once(':') {
-                set_var(cfg, k, v);
-            }
-        }
+    for (var, val) in file_locals(source).iter() {
+        set_var(cfg, var, val);
     }
-}
-
-/// The footer `Local Variables:` … `End:` block, whose lines share the comment
-/// prefix that precedes the `Local Variables:` marker.
-fn apply_footer(source: &str, cfg: &mut FormatConfig) {
-    let Some(marker) = source.rfind("Local Variables:") else {
-        return;
-    };
-    let line_start = source[..marker].rfind('\n').map_or(0, |i| i + 1);
-    let prefix = &source[line_start..marker];
-    for line in source[marker..].lines().skip(1) {
-        let body = line
-            .strip_prefix(prefix)
-            .unwrap_or_else(|| line.trim_start());
-        let body = body.trim();
-        if body.starts_with("End:") {
-            break;
-        }
-        if let Some((k, v)) = body.split_once(':') {
-            set_var(cfg, k, v);
-        }
-    }
-}
-
-fn between<'a>(s: &'a str, open: &str, close: &str) -> Option<&'a str> {
-    let start = s.find(open)? + open.len();
-    let end = s[start..].find(close)? + start;
-    Some(&s[start..end])
 }
 
 // --- Directory-local variables (ADR-0029 #2) -------------------------------
@@ -155,72 +111,28 @@ fn apply_dir_locals(path: &Path, cfg: &mut FormatConfig) {
 }
 
 fn apply_dir_locals_content(content: &str, cfg: &mut FormatConfig) {
-    let parsed = lispexp::parse(content, &Options::emacs_lisp());
-    let Some(top) = parsed.data.first() else {
-        return;
-    };
-    let DatumKind::List { items: entries, .. } = &top.kind else {
-        return;
-    };
-    for entry in entries {
-        let DatumKind::List { items, tail, .. } = &entry.kind else {
-            continue;
-        };
-        let Some(mode) = items.first() else {
-            continue;
-        };
-        if !mode_applies(mode) {
+    // `lispexp_emacs::dir_locals` parses the alist (both `(MODE . ((VAR . VAL) …))`
+    // and `(MODE (VAR . VAL) …)` entry forms, plus subdir nesting); lisplens keeps
+    // its own multi-mode applicability filter over the parsed entries. Subdir-scoped
+    // groups are ignored here — dir-locals resolution stays a per-directory,
+    // whole-file pass (subdir support is a future feature, not the mechanical port).
+    for entry in DirLocals::parse(content).entries() {
+        if entry.subdir.is_some() || !mode_applies(entry.mode.as_deref()) {
             continue;
         }
-        // Emacs accepts both `(MODE . ((VAR . VAL) …))` (dotted — the vars are the
-        // tail list) and `(MODE (VAR . VAL) …)` (the vars are the items after MODE).
-        let var_pairs: Vec<_> = match tail {
-            Some(t) => alist(t),
-            None => items[1..].iter().filter_map(pair).collect(),
-        };
-        for (var, val) in var_pairs {
-            if let (Some(var), Some(val)) = (atom_text(var), atom_text(val)) {
-                set_var(cfg, var, val);
-            }
+        for (var, val) in &entry.vars {
+            set_var(cfg, var, val);
         }
     }
 }
 
-/// The `(KEY . VALUE)` / `(KEY VALUE)` pairs of an alist datum.
-fn alist<'a, 't>(datum: &'a Datum<'t>) -> Vec<(&'a Datum<'t>, &'a Datum<'t>)> {
-    let DatumKind::List { items, .. } = &datum.kind else {
-        return Vec::new();
-    };
-    items.iter().filter_map(pair).collect()
-}
-
-fn pair<'a, 't>(datum: &'a Datum<'t>) -> Option<(&'a Datum<'t>, &'a Datum<'t>)> {
-    let DatumKind::List { items, tail, .. } = &datum.kind else {
-        return None;
-    };
-    let key = items.first()?;
-    if let Some(t) = tail {
-        Some((key, t)) // (key . value)
-    } else if items.len() == 2 {
-        Some((key, &items[1])) // (key value)
-    } else {
-        None
-    }
-}
-
-/// Whether a dir-locals mode key applies to Emacs Lisp (`nil` = all modes).
-fn mode_applies(mode: &Datum) -> bool {
+/// Whether a dir-locals mode entry applies to Emacs Lisp. `None` is the `nil` =
+/// all-modes entry; a named mode applies only if it is one of the Lisp modes.
+fn mode_applies(mode: Option<&str>) -> bool {
     matches!(
-        atom_text(mode),
-        Some("nil" | "emacs-lisp-mode" | "lisp-mode" | "lisp-data-mode" | "prog-mode")
+        mode,
+        None | Some("emacs-lisp-mode" | "lisp-mode" | "lisp-data-mode" | "prog-mode")
     )
-}
-
-fn atom_text<'a>(datum: &Datum<'a>) -> Option<&'a str> {
-    match &datum.kind {
-        DatumKind::Symbol(s) | DatumKind::Number(s) => Some(s),
-        _ => None,
-    }
 }
 
 // --- EditorConfig (ADR-0029 #3) --------------------------------------------
