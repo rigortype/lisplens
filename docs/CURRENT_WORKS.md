@@ -6,6 +6,16 @@ Codebase): `docs/dev/architecture.md`, `docs/dev/formatter.md`, `CONTEXT.md`,
 
 ## Now
 
+- **`check` command landed** (ADR-0032, first of the refactoring procedures): a
+  standalone parse-check — `lisplens check <file>` (+ MCP `check`) parses by
+  dialect and reports `path:line: message` diagnostics, silent + exit 0 when
+  clean, non-zero on parse errors. Surfaces the guarantee lisplens already
+  enforces on every edit (validate-then-write, ADR-0005) so agents/CI need not
+  shell out to `emacs -Q --batch check-parens` (the benchmark baseline did,
+  repeatedly). `check`/`diagnostics_text` in `lib.rs`; 109 tests. On branch
+  `feat/refactoring-procedures`. **Next in ADR-0032: `rename`, then `inline` /
+  `extract`.**
+
 - **Polyglot native formatter — every Emacs-bundled Lisp indenter now has an
   engine** (ADR-0031, 2026-07-04). The formatter dispatches by dialect over one
   shared driver + three faithful engines: Emacs Lisp (`lisp-indent-function`),

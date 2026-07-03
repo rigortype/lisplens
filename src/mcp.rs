@@ -109,7 +109,13 @@ fn tools() -> Value {
         ),
         tool(
             "format",
-            "Reindent an Emacs Lisp file in place",
+            "Reindent a Lisp file in place (native, by dialect)",
+            json!({ "file": file }),
+            &["file"]
+        ),
+        tool(
+            "check",
+            "Parse-check a Lisp file; report diagnostics (empty = clean)",
             json!({ "file": file }),
             &["file"]
         ),
@@ -185,6 +191,17 @@ fn run_tool(name: &str, args: &Value) -> Result<String, String> {
             }
             Ok("ok".to_string())
         }
+        "check" => {
+            let file = arg(args, "file")?;
+            let dialect = dialect_for_path(Path::new(file));
+            let source = read(file)?;
+            let diagnostics = crate::check(&source, dialect);
+            Ok(if diagnostics.is_empty() {
+                "ok".to_string()
+            } else {
+                crate::diagnostics_text(file, &diagnostics)
+            })
+        }
         "find" => {
             let name = arg(args, "name")?;
             let dir = args.get("dir").and_then(Value::as_str).unwrap_or(".");
@@ -257,6 +274,22 @@ mod tests {
         assert!(names.contains(&"struct_read"));
         assert!(names.contains(&"struct_edit"));
         assert!(names.contains(&"refs"));
+        assert!(names.contains(&"check"));
+    }
+
+    #[test]
+    fn check_tool_reports_clean_and_broken() {
+        let dir = tempfile::tempdir().unwrap();
+        let ok = dir.path().join("ok.el");
+        std::fs::write(&ok, "(defun f (x)\n  (+ x 1))\n").unwrap();
+        assert_eq!(
+            run_tool("check", &json!({ "file": ok.to_str().unwrap() })).unwrap(),
+            "ok"
+        );
+        let bad = dir.path().join("bad.el");
+        std::fs::write(&bad, "(defun f (x\n").unwrap();
+        let text = run_tool("check", &json!({ "file": bad.to_str().unwrap() })).unwrap();
+        assert!(text.contains("bad.el:1: "), "{text:?}");
     }
 
     #[test]

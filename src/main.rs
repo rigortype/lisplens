@@ -25,6 +25,7 @@ fn main() -> ExitCode {
         ["refs", name, dir] => run_refs(name, dir),
         ["format", file] => run_format(PathBuf::from(file), false),
         ["format", "--nameless", file] => run_format(PathBuf::from(file), true),
+        ["check", file] => run_check(PathBuf::from(file)),
         ["mcp"] => match lisplens::mcp::serve() {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {
@@ -166,6 +167,27 @@ fn run_format(path: PathBuf, nameless: bool) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+fn run_check(path: PathBuf) -> ExitCode {
+    let source = match std::fs::read_to_string(&path) {
+        Ok(source) => source,
+        Err(err) => {
+            eprintln!("lisplens: {}: {err}", path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let dialect = lisplens::dialect_for_path(&path);
+    let diagnostics = lisplens::check(&source, dialect);
+    // Silent success (exit 0); parse diagnostics to stderr + non-zero on errors,
+    // so the check composes in CI and agent pipelines (ADR-0032).
+    if diagnostics.is_empty() {
+        ExitCode::SUCCESS
+    } else {
+        let path = path.display().to_string();
+        eprint!("{}", lisplens::diagnostics_text(&path, &diagnostics));
+        ExitCode::FAILURE
+    }
+}
+
 fn run_find(name: &str, dir: &str) -> ExitCode {
     match lisplens::search::find_definitions(std::path::Path::new(dir), name) {
         Ok(hits) => {
@@ -201,6 +223,7 @@ fn usage() -> ExitCode {
     eprintln!("  lisplens find <name> [dir]    find definitions by name (default dir: .)");
     eprintln!("  lisplens refs <name> [dir]    find symbol occurrences (code/data tagged)");
     eprintln!("  lisplens format [--nameless] <file>  reindent a Lisp file (native, by dialect)");
+    eprintln!("  lisplens check <file>         parse-check a Lisp file (diagnostics; non-zero on errors)");
     eprintln!("  lisplens mcp                  run the MCP server over stdio");
     eprintln!();
     eprintln!("Skeleton stage — see CONTEXT.md and docs/adr/ for the full design.");

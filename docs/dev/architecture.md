@@ -38,10 +38,11 @@ line   edit <file>          apply Line-hash patch from stdin (replace/delete/ins
 find <name> [dir]           definitions by name
 refs <name> [dir]           symbol occurrences (code/data tagged)
 format <file>               reindent a Lisp file (native, by dialect; honors config)
+check  <file>               parse-check (diagnostics; non-zero exit on errors, ADR-0032)
 mcp                         MCP server over stdio
 ```
 MCP tools mirror the CLI: `struct_read`/`line_read`/`struct_edit`/`line_edit`/
-`find`/`refs`/`format`. Edit tools take a `patch` string (ADR-0019's JSON
+`find`/`refs`/`format`/`check`. Edit tools take a `patch` string (ADR-0019's JSON
 op-array is a future option).
 
 ## Patch DSL (ADR-0021)
