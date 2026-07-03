@@ -29,6 +29,9 @@ fn main() -> ExitCode {
         ["rename", from, to, file] => run_rename(from, to, PathBuf::from(file)),
         ["inline", name, file] => run_inline(name, PathBuf::from(file)),
         ["rewrite", file] => run_rewrite(PathBuf::from(file)),
+        ["extract", file, anchor, name, params @ ..] => {
+            run_extract(PathBuf::from(file), anchor, name, params)
+        }
         ["mcp"] => match lisplens::mcp::serve() {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {
@@ -245,6 +248,21 @@ fn run_rewrite(path: PathBuf) -> ExitCode {
     }
 }
 
+fn run_extract(path: PathBuf, anchor: &str, name: &str, params: &[&str]) -> ExitCode {
+    let dialect = lisplens::dialect_for_path(&path);
+    let params: Vec<String> = params.iter().map(|s| s.to_string()).collect();
+    match lisplens::refactor::extract_into_function(&path, anchor, name, &params, dialect) {
+        Ok(outcome) => {
+            println!("extracted `{name}`  {}", outcome.new_file_hash);
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("lisplens: {}: {err}", path.display());
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn run_find(name: &str, dir: &str) -> ExitCode {
     match lisplens::search::find_definitions(std::path::Path::new(dir), name) {
         Ok(hits) => {
@@ -291,6 +309,9 @@ fn usage() -> ExitCode {
     );
     eprintln!(
         "  lisplens rewrite <file>       structural pattern->template rewrite (spec on stdin)"
+    );
+    eprintln!(
+        "  lisplens extract <file> <anchor> <name> [param...]  pull a form into a new function"
     );
     eprintln!("  lisplens mcp                  run the MCP server over stdio");
     eprintln!();

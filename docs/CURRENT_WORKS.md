@@ -6,6 +6,19 @@ Codebase): `docs/dev/architecture.md`, `docs/dev/formatter.md`, `CONTEXT.md`,
 
 ## Now
 
+- **`extract` implemented** (ADR-0034) — the last ADR-0032 member: `lisplens
+  extract <file> <anchor> <name> [param...]` (+ MCP `extract`) pulls the form at
+  `anchor` into a new function and replaces it with a call. **User supplies the
+  name + params; lisplens does not infer free variables** (stays within the
+  ADR-0003 semantic ceiling — like `rewrite`, the user asserts, lisplens
+  guarantees parse-safety). A pure cut+wrap (no symbol substitution): builds
+  `(defun NAME (PARAMS) <selection>)` before the enclosing top-level form and
+  `(NAME PARAMS)` in place, per-dialect def form (elisp/CL `defun`, Scheme
+  `define`, Clojure `defn []`; others error), reindented + validated.
+  `extract_into_function` in `src/refactor.rs`. 131 tests. **The ADR-0032
+  refactoring family (check/rename/inline/rewrite/extract) is complete.** Future
+  opt-ins: free-var inference, block (`anchor+count`) extraction, non-`defun` kinds.
+
 - **`rewrite` implemented** (ADR-0033): `lisplens rewrite <file>` (spec on stdin)
   + MCP `rewrite` — a structural pattern→template "sed" in `src/refactor.rs`
   (`rewrite_in_file`): a `Datum` matcher (metavariables + classes + non-linear +

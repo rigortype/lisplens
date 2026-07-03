@@ -140,6 +140,17 @@ fn tools() -> Value {
             json!({ "file": file, "spec": rspec }),
             &["file", "spec"]
         ),
+        tool(
+            "extract",
+            "Pull the form at `anchor` into a new function `name` with `params`",
+            json!({
+                "file": file,
+                "anchor": json!({ "type": "string", "description": "line:hash[:ordinal] of the form" }),
+                "name": name,
+                "params": json!({ "type": "array", "items": { "type": "string" }, "description": "parameter symbols (default none)" })
+            }),
+            &["file", "anchor", "name"]
+        ),
     ])
 }
 
@@ -259,6 +270,30 @@ fn run_tool(name: &str, args: &Value) -> Result<String, String> {
                 outcome.rewritten, outcome.new_file_hash
             ))
         }
+        "extract" => {
+            let file = arg(args, "file")?;
+            let anchor = arg(args, "anchor")?;
+            let name = arg(args, "name")?;
+            let params: Vec<String> = args
+                .get("params")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let dialect = dialect_for_path(Path::new(file));
+            let outcome = crate::refactor::extract_into_function(
+                Path::new(file),
+                anchor,
+                name,
+                &params,
+                dialect,
+            )
+            .map_err(|e| e.to_string())?;
+            Ok(format!("extracted `{name}`  {}", outcome.new_file_hash))
+        }
         "find" => {
             let name = arg(args, "name")?;
             let dir = args.get("dir").and_then(Value::as_str).unwrap_or(".");
@@ -333,6 +368,24 @@ mod tests {
         assert!(names.contains(&"refs"));
         assert!(names.contains(&"check"));
         assert!(names.contains(&"rewrite"));
+        assert!(names.contains(&"extract"));
+    }
+
+    #[test]
+    fn extract_tool_pulls_a_form_into_a_function() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.el");
+        std::fs::write(&path, "(defun foo (x)\n  (* x 2))\n").unwrap();
+        let anchor = format!("2:{}", crate::hash::anchor_hash("(* x 2)".as_bytes()));
+        let text = run_tool(
+            "extract",
+            &json!({ "file": path.to_str().unwrap(), "anchor": anchor, "name": "dbl", "params": ["x"] }),
+        )
+        .unwrap();
+        assert!(text.starts_with("extracted `dbl`"), "{text}");
+        let r = std::fs::read_to_string(&path).unwrap();
+        assert!(r.starts_with("(defun dbl (x) (* x 2))\n\n"), "{r}");
+        assert!(r.contains("  (dbl x))"), "{r}");
     }
 
     #[test]

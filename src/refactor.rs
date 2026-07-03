@@ -1181,6 +1181,162 @@ pub fn rewrite_in_file(
     })
 }
 
+// ===== extract: pull a form into a new function (ADR-0034) =====
+
+/// The result of a successful [`extract_into_function`].
+#[derive(Debug)]
+pub struct ExtractOutcome {
+    /// The file hash after the extraction, over the reindented content.
+    pub new_file_hash: String,
+}
+
+/// Why an extraction was refused. No partial write ever happens on an error.
+#[derive(Debug)]
+pub enum ExtractError {
+    /// The anchor was not `line:hash[:ordinal]`.
+    BadAnchor(String),
+    /// No form matched the anchor.
+    AnchorNotFound(String),
+    /// The dialect has no known function-definition form yet.
+    UnsupportedDialect(String),
+    /// The edits could not be spliced.
+    Splice(SpliceError),
+    /// The safe write was refused.
+    Write(WriteError),
+    /// A filesystem error.
+    Io(std::io::Error),
+}
+
+impl std::fmt::Display for ExtractError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ExtractError::BadAnchor(a) => write!(f, "anchor `{a}` is not `line:hash[:ordinal]`"),
+            ExtractError::AnchorNotFound(a) => write!(f, "no form at anchor `{a}`"),
+            ExtractError::UnsupportedDialect(d) => write!(f, "extract not supported for {d} yet"),
+            ExtractError::Splice(e) => write!(f, "splice failed: {e:?}"),
+            ExtractError::Write(e) => write!(f, "{e:?}"),
+            ExtractError::Io(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+/// Extract the form at `anchor` into a new function `name` with parameters
+/// `params`, replacing the form with a call `(name params…)` (ADR-0034).
+///
+/// A pure cut + wrap: the selection already uses its free variables by name and
+/// the call site is in their scope, so no symbol substitution is needed —
+/// lisplens supplies neither the name nor the parameters (the user asserts which
+/// free locals are parameters; it does not infer them, per the ADR-0003 ceiling).
+/// The new definition is placed just before the enclosing top-level form, its
+/// wrapper chosen per dialect (`defun`/`define`/`defn`); unsupported dialects are
+/// refused. Parse-safe only: behaviour is preserved only if the parameters cover
+/// the free locals and the selection has no context-dependent non-local exit.
+pub fn extract_into_function(
+    path: &Path,
+    anchor: &str,
+    name: &str,
+    params: &[String],
+    dialect: Dialect,
+) -> Result<ExtractOutcome, ExtractError> {
+    let source = std::fs::read_to_string(path).map_err(ExtractError::Io)?;
+    let options = Options::for_dialect(dialect);
+    let parsed = parse(&source, &options);
+
+    let anchor_val = parse_anchor(anchor).ok_or_else(|| ExtractError::BadAnchor(anchor.into()))?;
+    let located = crate::resolve::resolve(&source, &parsed.data, &anchor_val)
+        .ok_or_else(|| ExtractError::AnchorNotFound(anchor.into()))?;
+    let sel = span_of(located.node);
+
+    // The enclosing top-level form (the def is inserted just before it); falls
+    // back to the selection itself when the form is already top-level.
+    let encl_start = parsed
+        .data
+        .iter()
+        .find(|d| (d.span.start as usize) <= sel.start && sel.end <= (d.span.end as usize))
+        .map_or(sel.start, |d| d.span.start as usize);
+
+    let body = &source[sel.clone()];
+    let def = def_form(dialect, name, params, body)
+        .ok_or_else(|| ExtractError::UnsupportedDialect(format!("{dialect:?}")))?;
+    let call = call_form(name, params);
+
+    let edits = vec![
+        Edit {
+            range: encl_start..encl_start,
+            text: format!("{def}\n\n"),
+        },
+        Edit {
+            range: sel,
+            text: call,
+        },
+    ];
+    let expected = file_hash(source.as_bytes());
+    let (spliced, spans) = splice_tracked(&source, edits).map_err(ExtractError::Splice)?;
+    let new_content = if has_native_engine(dialect) {
+        let config = crate::config::resolve(path, &spliced);
+        reindent(
+            &spliced,
+            &config,
+            dialect,
+            None,
+            Touched {
+                expand: &spans,
+                exact: &[],
+            },
+        )
+    } else {
+        spliced
+    };
+    verify_and_write(path, &expected, &new_content, &options).map_err(ExtractError::Write)?;
+    Ok(ExtractOutcome {
+        new_file_hash: file_hash(new_content.as_bytes()),
+    })
+}
+
+/// Parse a `line:hash[:ordinal]` anchor string.
+fn parse_anchor(token: &str) -> Option<crate::patch::Anchor> {
+    let mut parts = token.split(':');
+    let line = parts.next()?.parse::<u32>().ok()?;
+    let hash = parts.next().filter(|s| !s.is_empty())?.to_string();
+    let ordinal = match parts.next() {
+        Some(s) => Some(s.parse::<u32>().ok()?),
+        None => None,
+    };
+    Some(crate::patch::Anchor {
+        line,
+        hash,
+        ordinal,
+    })
+}
+
+/// The new-function wrapper for `dialect` (`None` if the dialect has no known
+/// def form). Only the wrapper is dialect-specific; `body` is the verbatim
+/// selection.
+fn def_form(dialect: Dialect, name: &str, params: &[String], body: &str) -> Option<String> {
+    let ps = params.join(" ");
+    Some(match dialect {
+        Dialect::EmacsLisp | Dialect::CommonLisp => format!("(defun {name} ({ps}) {body})"),
+        Dialect::Scheme
+        | Dialect::Guile
+        | Dialect::Racket
+        | Dialect::Gauche
+        | Dialect::Mosh
+        | Dialect::Gambit
+        | Dialect::SchemeSuperset => format!("(define ({name} {ps}) {body})"),
+        Dialect::Clojure => format!("(defn {name} [{ps}] {body})"),
+        _ => return None,
+    })
+}
+
+/// The call `(name params…)` that replaces the extracted form.
+fn call_form(name: &str, params: &[String]) -> String {
+    if params.is_empty() {
+        format!("({name})")
+    } else {
+        format!("({name} {})", params.join(" "))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1461,5 +1617,97 @@ mod tests {
             rewrite_in_file(&path, &s2, Dialect::EmacsLisp),
             Err(RewriteError::Drift { .. })
         ));
+    }
+
+    // ----- extract (ADR-0034) -----
+
+    /// Anchor `line:hash` for the form whose verbatim text is `form` at `line`.
+    fn anchor_for(form: &str, line: u32) -> String {
+        format!("{line}:{}", crate::hash::anchor_hash(form.as_bytes()))
+    }
+
+    #[test]
+    fn extract_expression_with_a_param() {
+        let (_d, path) = write_temp(
+            "a.el",
+            "(defun foo (x)\n  (message \"hi\")\n  (* (+ x 1) 2))\n",
+        );
+        let a = anchor_for("(* (+ x 1) 2)", 3);
+        extract_into_function(&path, &a, "compute", &["x".into()], Dialect::EmacsLisp).unwrap();
+        let r = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            r.starts_with("(defun compute (x) (* (+ x 1) 2))\n\n"),
+            "{r}"
+        );
+        assert!(r.contains("  (compute x))"), "{r}");
+    }
+
+    #[test]
+    fn extract_niladic_and_scheme_and_clojure() {
+        // Niladic (Emacs Lisp).
+        let (_d, p1) = write_temp("a.el", "(defun foo ()\n  (side-effect)\n  (bar))\n");
+        extract_into_function(
+            &p1,
+            &anchor_for("(side-effect)", 2),
+            "act",
+            &[],
+            Dialect::EmacsLisp,
+        )
+        .unwrap();
+        let r1 = std::fs::read_to_string(&p1).unwrap();
+        assert!(r1.starts_with("(defun act () (side-effect))\n\n"), "{r1}");
+        assert!(r1.contains("  (act)\n"), "{r1}");
+
+        // Scheme `define`.
+        let (_d, p2) = write_temp("a.scm", "(define (f x)\n  (+ x 1))\n");
+        extract_into_function(
+            &p2,
+            &anchor_for("(+ x 1)", 2),
+            "g",
+            &["x".into()],
+            Dialect::Scheme,
+        )
+        .unwrap();
+        assert!(std::fs::read_to_string(&p2)
+            .unwrap()
+            .starts_with("(define (g x) (+ x 1))\n\n"));
+
+        // Clojure `defn` with `[]` params.
+        let (_d, p3) = write_temp("a.clj", "(defn f [x] (+ x 1))\n");
+        extract_into_function(
+            &p3,
+            &anchor_for("(+ x 1)", 1),
+            "g",
+            &["x".into()],
+            Dialect::Clojure,
+        )
+        .unwrap();
+        assert!(std::fs::read_to_string(&p3)
+            .unwrap()
+            .contains("(defn g [x] (+ x 1))"));
+    }
+
+    #[test]
+    fn extract_rejects_bad_anchor_missing_and_unsupported_dialect() {
+        let (_d, path) = write_temp("a.el", "(defun foo (x) (g x))\n");
+        assert!(matches!(
+            extract_into_function(&path, "nope", "h", &[], Dialect::EmacsLisp),
+            Err(ExtractError::BadAnchor(_))
+        ));
+        assert!(matches!(
+            extract_into_function(&path, "1:dead", "h", &[], Dialect::EmacsLisp),
+            Err(ExtractError::AnchorNotFound(_))
+        ));
+        // Unsupported dialect: a Fennel file with a valid anchor reaches def_form.
+        let (_d, fnl) = write_temp("a.fnl", "(fn [x] (+ x 1))\n");
+        let a = anchor_for("(+ x 1)", 1);
+        assert!(matches!(
+            extract_into_function(&fnl, &a, "g", &["x".into()], Dialect::Fennel),
+            Err(ExtractError::UnsupportedDialect(_))
+        ));
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "(defun foo (x) (g x))\n"
+        ); // untouched
     }
 }

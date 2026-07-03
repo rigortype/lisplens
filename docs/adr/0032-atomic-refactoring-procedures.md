@@ -105,10 +105,10 @@ proposed
   each procedure is one deliberate, safe reach a `sed` one-liner can't match on
   siblings/parens, and the built-in post-condition removes the agent's manual
   re-verify step.
-- Ship order by cost/unblocking: **`check`**, **`rename`**, **`inline`**, and
-  **`rewrite`** (ADR-0033) have landed (`src/refactor.rs`). `inline` ships the
-  restricted-safe subset above (niladic direct substitution, params via `let`,
-  everything unsafe refused with a reason); the true "extract into a new function"
-  remains the one unbuilt member.
+- All members have landed (`src/refactor.rs`): **`check`**, **`rename`**,
+  **`inline`**, **`rewrite`** (ADR-0033), and **`extract`** (ADR-0034 — pull a form
+  into a new function, user-supplied name+params). `inline` ships the
+  restricted-safe subset above; `rewrite` is the general structural sed; `extract`
+  is a pure cut+wrap within the ADR-0003 ceiling.
 - Re-benchmark the inline round-trip against an `inline`/`rewrite`-equipped build to
   quantify the step-count drop (iter-4 was a 10-op hand-assembled `line edit`).
