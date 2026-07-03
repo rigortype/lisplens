@@ -71,6 +71,7 @@ fn tools() -> Value {
     let name = json!({ "type": "string" });
     let from = json!({ "type": "string", "description": "the symbol to rename" });
     let to = json!({ "type": "string", "description": "the new symbol name" });
+    let rspec = json!({ "type": "string", "description": "rewrite spec: pattern <<TAG … TAG / template <<TAG … TAG (ADR-0033)" });
     let dir = json!({ "type": "string", "description": "directory to search (default: .)" });
     json!([
         tool(
@@ -132,6 +133,12 @@ fn tools() -> Value {
             "Inline a function at its call sites (safe subset)",
             json!({ "file": file, "name": name }),
             &["file", "name"]
+        ),
+        tool(
+            "rewrite",
+            "Structural pattern->template rewrite (structural sed; not behaviour-preserving)",
+            json!({ "file": file, "spec": rspec }),
+            &["file", "spec"]
         ),
     ])
 }
@@ -241,6 +248,17 @@ fn run_tool(name: &str, args: &Value) -> Result<String, String> {
                 outcome.inlined, outcome.new_file_hash
             ))
         }
+        "rewrite" => {
+            let file = arg(args, "file")?;
+            let spec = arg(args, "spec")?;
+            let dialect = dialect_for_path(Path::new(file));
+            let outcome = crate::refactor::rewrite_in_file(Path::new(file), spec, dialect)
+                .map_err(|e| e.to_string())?;
+            Ok(format!(
+                "rewrote {} site(s)  {}",
+                outcome.rewritten, outcome.new_file_hash
+            ))
+        }
         "find" => {
             let name = arg(args, "name")?;
             let dir = args.get("dir").and_then(Value::as_str).unwrap_or(".");
@@ -314,6 +332,22 @@ mod tests {
         assert!(names.contains(&"struct_edit"));
         assert!(names.contains(&"refs"));
         assert!(names.contains(&"check"));
+        assert!(names.contains(&"rewrite"));
+    }
+
+    #[test]
+    fn rewrite_tool_applies_a_pattern() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.el");
+        std::fs::write(&path, "(when flag (foo))\n").unwrap();
+        let spec = "pattern <<P\n(when $c $b)\nP\ntemplate <<T\n$b\nT\n";
+        let text = run_tool(
+            "rewrite",
+            &json!({ "file": path.to_str().unwrap(), "spec": spec }),
+        )
+        .unwrap();
+        assert!(text.starts_with("rewrote 1 site"), "{text}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "(foo)\n");
     }
 
     #[test]

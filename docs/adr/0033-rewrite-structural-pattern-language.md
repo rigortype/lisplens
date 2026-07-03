@@ -163,7 +163,8 @@ parse errors, ADR-0005) → atomic write; reports the site count + new file hash
 
 ## Status
 
-proposed
+accepted — implemented in `src/refactor.rs` (`rewrite_in_file`), CLI `rewrite`
++ MCP `rewrite`.
 
 ## Consequences
 

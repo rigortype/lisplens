@@ -28,6 +28,7 @@ fn main() -> ExitCode {
         ["check", file] => run_check(PathBuf::from(file)),
         ["rename", from, to, file] => run_rename(from, to, PathBuf::from(file)),
         ["inline", name, file] => run_inline(name, PathBuf::from(file)),
+        ["rewrite", file] => run_rewrite(PathBuf::from(file)),
         ["mcp"] => match lisplens::mcp::serve() {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {
@@ -224,6 +225,26 @@ fn run_inline(name: &str, path: PathBuf) -> ExitCode {
     }
 }
 
+fn run_rewrite(path: PathBuf) -> ExitCode {
+    let Some(spec) = read_stdin() else {
+        return ExitCode::FAILURE;
+    };
+    let dialect = lisplens::dialect_for_path(&path);
+    match lisplens::refactor::rewrite_in_file(&path, &spec, dialect) {
+        Ok(outcome) => {
+            println!(
+                "rewrote {} site(s)  {}",
+                outcome.rewritten, outcome.new_file_hash
+            );
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("lisplens: {}: {err}", path.display());
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn run_find(name: &str, dir: &str) -> ExitCode {
     match lisplens::search::find_definitions(std::path::Path::new(dir), name) {
         Ok(hits) => {
@@ -267,6 +288,9 @@ fn usage() -> ExitCode {
     );
     eprintln!(
         "  lisplens inline <name> <file>        inline a function at its call sites (safe subset)"
+    );
+    eprintln!(
+        "  lisplens rewrite <file>       structural pattern->template rewrite (spec on stdin)"
     );
     eprintln!("  lisplens mcp                  run the MCP server over stdio");
     eprintln!();
