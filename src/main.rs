@@ -257,12 +257,33 @@ fn run_extract(path: PathBuf, anchor: &str, name: &str, args: &[&str]) -> ExitCo
             return ExitCode::FAILURE;
         }
     };
+    // `--also` (generalizing multi-anchor) is a distinct site-selection mode.
+    if !opts.also.is_empty() {
+        if opts.all {
+            eprintln!("lisplens: extract: --also cannot be combined with --all");
+            return ExitCode::FAILURE;
+        }
+        if opts.count != 1 {
+            eprintln!("lisplens: extract: --also cannot be combined with --count");
+            return ExitCode::FAILURE;
+        }
+        let result = lisplens::refactor::extract_generalized(
+            &path,
+            anchor,
+            &opts.also,
+            name,
+            &opts.params,
+            opts.kind.as_deref(),
+            dialect,
+        );
+        return report_extract(&path, name, result);
+    }
     let extract = if opts.all {
         lisplens::refactor::extract_multi_site
     } else {
         lisplens::refactor::extract_block_into_function
     };
-    match extract(
+    let result = extract(
         &path,
         anchor,
         name,
@@ -270,7 +291,17 @@ fn run_extract(path: PathBuf, anchor: &str, name: &str, args: &[&str]) -> ExitCo
         opts.count,
         opts.kind.as_deref(),
         dialect,
-    ) {
+    );
+    report_extract(&path, name, result)
+}
+
+/// Print the outcome of an extraction, mapping it to an exit code.
+fn report_extract(
+    path: &std::path::Path,
+    name: &str,
+    result: Result<lisplens::refactor::ExtractOutcome, lisplens::refactor::ExtractError>,
+) -> ExitCode {
+    match result {
         Ok(outcome) => {
             println!(
                 "extracted `{name}` at {} site(s)  {}",
@@ -290,17 +321,20 @@ struct ExtractOpts {
     count: usize,
     kind: Option<String>,
     all: bool,
+    also: Vec<String>,
     params: Vec<String>,
 }
 
 /// Split `--count N` / `--count=N` (default 1), `--kind HEAD` / `--kind=HEAD`
-/// (default: dialect's defun/define/defn), and `--all` (default off) out of
+/// (default: dialect's defun/define/defn), `--all` (default off), and `--also
+/// ANCHOR` / `--also=ANCHOR` (repeatable, additional generalizing sites) out of
 /// `extract`'s trailing args; everything else is a parameter symbol. Params are
 /// Lisp symbols, so none begins with `--`, so this never swallows a real parameter.
 fn parse_extract_opts(args: &[&str]) -> Result<ExtractOpts, String> {
     let mut count = 1usize;
     let mut kind = None;
     let mut all = false;
+    let mut also = Vec::new();
     let mut params = Vec::new();
     let mut i = 0;
     while i < args.len() {
@@ -321,6 +355,14 @@ fn parse_extract_opts(args: &[&str]) -> Result<ExtractOpts, String> {
                 .ok_or_else(|| "--kind needs a value".to_string())?;
             kind = Some(h.to_string());
             i += 1;
+        } else if let Some(anchor) = a.strip_prefix("--also=") {
+            also.push(anchor.to_string());
+        } else if a == "--also" {
+            let anchor = args
+                .get(i + 1)
+                .ok_or_else(|| "--also needs an anchor".to_string())?;
+            also.push(anchor.to_string());
+            i += 1;
         } else if a == "--all" {
             all = true;
         } else {
@@ -332,6 +374,7 @@ fn parse_extract_opts(args: &[&str]) -> Result<ExtractOpts, String> {
         count,
         kind,
         all,
+        also,
         params,
     })
 }
@@ -384,7 +427,7 @@ fn usage() -> ExitCode {
         "  lisplens rewrite <file>       structural pattern->template rewrite (spec on stdin)"
     );
     eprintln!(
-        "  lisplens extract <file> <anchor> <name> [param...] [--count N] [--kind HEAD] [--all]  pull a form (or a run of N) into a new function"
+        "  lisplens extract <file> <anchor> <name> [param...] [--count N] [--kind HEAD] [--all] [--also ANCHOR]  pull a form (or a run of N) into a new function"
     );
     eprintln!("  lisplens mcp                  run the MCP server over stdio");
     eprintln!();

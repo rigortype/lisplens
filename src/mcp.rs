@@ -142,15 +142,16 @@ fn tools() -> Value {
         ),
         tool(
             "extract",
-            "Pull the form at `anchor` (or the run of `count` siblings from it) into a new function `name` with `params`. `kind` overrides the defining operator (e.g. defsubst, cl-defun, defn-); the dialect's default (defun/define/defn) is used when omitted. With `all` true, every occurrence structurally equal to the selection is replaced by a call to the one new function",
+            "Pull the form at `anchor` (or the run of `count` siblings from it) into a new function `name` with `params`. `kind` overrides the defining operator (e.g. defsubst, cl-defun, defn-); the dialect's default (defun/define/defn) is used when omitted. With `all` true, every occurrence structurally equal to the selection is replaced by a call to the one new function. With `also` (a list of extra anchors), the anchored form and those sites are anti-unified: their common skeleton becomes the body and the positions that differ become inferred parameters, each site calling with its own sub-terms",
             json!({
                 "file": file,
                 "anchor": json!({ "type": "string", "description": "line:hash[:ordinal] of the form" }),
                 "name": name,
-                "params": json!({ "type": "array", "items": { "type": "string" }, "description": "parameter symbols (default none)" }),
+                "params": json!({ "type": "array", "items": { "type": "string" }, "description": "parameter symbols (default none); with `also`, names the inferred params (must match the inferred count)" }),
                 "count": json!({ "type": "integer", "minimum": 1, "description": "number of contiguous sibling forms to extract (default 1)" }),
                 "kind": json!({ "type": "string", "description": "defining operator head (default: dialect's defun/define/defn)" }),
-                "all": json!({ "type": "boolean", "description": "extract every structurally-equal occurrence, not just the anchored one (default false)" })
+                "all": json!({ "type": "boolean", "description": "extract every structurally-equal occurrence, not just the anchored one (default false)" }),
+                "also": json!({ "type": "array", "items": { "type": "string" }, "description": "extra site anchors to anti-unify with the anchored form (generalizing extraction); differing sub-terms become parameters" })
             }),
             &["file", "anchor", "name"]
         ),
@@ -293,14 +294,42 @@ fn run_tool(name: &str, args: &Value) -> Result<String, String> {
                 .unwrap_or(1);
             let kind = args.get("kind").and_then(Value::as_str);
             let all = args.get("all").and_then(Value::as_bool).unwrap_or(false);
+            let also: Vec<String> = args
+                .get("also")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
             let dialect = dialect_for_path(Path::new(file));
-            let extract = if all {
-                crate::refactor::extract_multi_site
+            // `also` (generalizing multi-anchor) is a distinct site-selection mode.
+            let outcome = if !also.is_empty() {
+                if all {
+                    return Err("`also` cannot be combined with `all`".into());
+                }
+                if count != 1 {
+                    return Err("`also` cannot be combined with `count`".into());
+                }
+                crate::refactor::extract_generalized(
+                    Path::new(file),
+                    anchor,
+                    &also,
+                    name,
+                    &params,
+                    kind,
+                    dialect,
+                )
             } else {
-                crate::refactor::extract_block_into_function
-            };
-            let outcome = extract(Path::new(file), anchor, name, &params, count, kind, dialect)
-                .map_err(|e| e.to_string())?;
+                let extract = if all {
+                    crate::refactor::extract_multi_site
+                } else {
+                    crate::refactor::extract_block_into_function
+                };
+                extract(Path::new(file), anchor, name, &params, count, kind, dialect)
+            }
+            .map_err(|e| e.to_string())?;
             Ok(format!(
                 "extracted `{name}` at {} site(s)  {}",
                 outcome.sites, outcome.new_file_hash
