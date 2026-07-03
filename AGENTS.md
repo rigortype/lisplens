@@ -13,6 +13,8 @@ agents, built on the lispexp reader. Orient with these before changing code:
 
 Conventions: Rust edition 2021, current stable (no pinned MSRV — a binary tool whose deps track recent Rust); keep `cargo fmt`, `cargo test`, and `cargo clippy --all-targets` green. Commit as work lands, with imperative subjects and ADR refs.
 
+Markdown destined for GitHub (PR descriptions, release notes, issue bodies) must **not** hard-wrap prose lines — GitHub renders a hard line break as `<br>`, so wrapped paragraphs display with ragged breaks. Write each paragraph as one long line and let it soft-wrap. (In-repo docs keep their usual wrapping; this convention applies to text GitHub renders.)
+
 ## Agent skills
 
 ### Issue tracker

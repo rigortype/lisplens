@@ -250,15 +250,21 @@ fn run_rewrite(path: PathBuf) -> ExitCode {
 
 fn run_extract(path: PathBuf, anchor: &str, name: &str, args: &[&str]) -> ExitCode {
     let dialect = lisplens::dialect_for_path(&path);
-    let (count, params) = match parse_count_flag(args) {
-        Ok(pair) => pair,
+    let (count, kind, params) = match parse_extract_opts(args) {
+        Ok(triple) => triple,
         Err(msg) => {
             eprintln!("lisplens: extract: {msg}");
             return ExitCode::FAILURE;
         }
     };
     match lisplens::refactor::extract_block_into_function(
-        &path, anchor, name, &params, count, dialect,
+        &path,
+        anchor,
+        name,
+        &params,
+        count,
+        kind.as_deref(),
+        dialect,
     ) {
         Ok(outcome) => {
             println!("extracted `{name}`  {}", outcome.new_file_hash);
@@ -271,11 +277,13 @@ fn run_extract(path: PathBuf, anchor: &str, name: &str, args: &[&str]) -> ExitCo
     }
 }
 
-/// Split `--count N` / `--count=N` (default 1) out of `extract`'s trailing args;
+/// Split `--count N` / `--count=N` (default 1) and `--kind HEAD` / `--kind=HEAD`
+/// (default: dialect's defun/define/defn) out of `extract`'s trailing args;
 /// everything else is a parameter symbol. Params are Lisp symbols, so none begins
 /// with `--`, so this never swallows a real parameter.
-fn parse_count_flag(args: &[&str]) -> Result<(usize, Vec<String>), String> {
+fn parse_extract_opts(args: &[&str]) -> Result<(usize, Option<String>, Vec<String>), String> {
     let mut count = 1usize;
+    let mut kind = None;
     let mut params = Vec::new();
     let mut i = 0;
     while i < args.len() {
@@ -288,12 +296,20 @@ fn parse_count_flag(args: &[&str]) -> Result<(usize, Vec<String>), String> {
                 .ok_or_else(|| "--count needs a value".to_string())?;
             count = n.parse().map_err(|_| format!("invalid --count `{n}`"))?;
             i += 1;
+        } else if let Some(h) = a.strip_prefix("--kind=") {
+            kind = Some(h.to_string());
+        } else if a == "--kind" {
+            let h = args
+                .get(i + 1)
+                .ok_or_else(|| "--kind needs a value".to_string())?;
+            kind = Some(h.to_string());
+            i += 1;
         } else {
             params.push(a.to_string());
         }
         i += 1;
     }
-    Ok((count, params))
+    Ok((count, kind, params))
 }
 
 fn run_find(name: &str, dir: &str) -> ExitCode {
@@ -344,7 +360,7 @@ fn usage() -> ExitCode {
         "  lisplens rewrite <file>       structural pattern->template rewrite (spec on stdin)"
     );
     eprintln!(
-        "  lisplens extract <file> <anchor> <name> [param...] [--count N]  pull a form (or a run of N) into a new function"
+        "  lisplens extract <file> <anchor> <name> [param...] [--count N] [--kind HEAD]  pull a form (or a run of N) into a new function"
     );
     eprintln!("  lisplens mcp                  run the MCP server over stdio");
     eprintln!();

@@ -142,13 +142,14 @@ fn tools() -> Value {
         ),
         tool(
             "extract",
-            "Pull the form at `anchor` (or the run of `count` siblings from it) into a new function `name` with `params`",
+            "Pull the form at `anchor` (or the run of `count` siblings from it) into a new function `name` with `params`. `kind` overrides the defining operator (e.g. defsubst, cl-defun, defn-); the dialect's default (defun/define/defn) is used when omitted",
             json!({
                 "file": file,
                 "anchor": json!({ "type": "string", "description": "line:hash[:ordinal] of the form" }),
                 "name": name,
                 "params": json!({ "type": "array", "items": { "type": "string" }, "description": "parameter symbols (default none)" }),
-                "count": json!({ "type": "integer", "minimum": 1, "description": "number of contiguous sibling forms to extract (default 1)" })
+                "count": json!({ "type": "integer", "minimum": 1, "description": "number of contiguous sibling forms to extract (default 1)" }),
+                "kind": json!({ "type": "string", "description": "defining operator head (default: dialect's defun/define/defn)" })
             }),
             &["file", "anchor", "name"]
         ),
@@ -289,6 +290,7 @@ fn run_tool(name: &str, args: &Value) -> Result<String, String> {
                 .and_then(Value::as_u64)
                 .map(|n| n as usize)
                 .unwrap_or(1);
+            let kind = args.get("kind").and_then(Value::as_str);
             let dialect = dialect_for_path(Path::new(file));
             let outcome = crate::refactor::extract_block_into_function(
                 Path::new(file),
@@ -296,6 +298,7 @@ fn run_tool(name: &str, args: &Value) -> Result<String, String> {
                 name,
                 &params,
                 count,
+                kind,
                 dialect,
             )
             .map_err(|e| e.to_string())?;

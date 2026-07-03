@@ -1245,7 +1245,7 @@ pub fn extract_into_function(
     params: &[String],
     dialect: Dialect,
 ) -> Result<ExtractOutcome, ExtractError> {
-    extract_block_into_function(path, anchor, name, params, 1, dialect)
+    extract_block_into_function(path, anchor, name, params, 1, None, dialect)
 }
 
 /// Extract the run of `count` contiguous sibling forms starting at `anchor` into a
@@ -1253,13 +1253,15 @@ pub fn extract_into_function(
 /// (which is the `count == 1` case): the run is wrapped verbatim as an implicit
 /// `progn` body, so it is behaviour-preserving only in a body/`progn` position.
 /// Errors, and never partially writes, if the run crosses the anchored form's
-/// sibling group.
+/// sibling group. `kind` overrides the definition head within the dialect's shape
+/// family (ADR-0036), `None` for the plain-function default.
 pub fn extract_block_into_function(
     path: &Path,
     anchor: &str,
     name: &str,
     params: &[String],
     count: usize,
+    kind: Option<&str>,
     dialect: Dialect,
 ) -> Result<ExtractOutcome, ExtractError> {
     let source = std::fs::read_to_string(path).map_err(ExtractError::Io)?;
@@ -1280,7 +1282,7 @@ pub fn extract_block_into_function(
         .map_or(sel.start, |d| d.span.start as usize);
 
     let body = &source[sel.clone()];
-    let def = def_form(dialect, name, params, body)
+    let def = def_form(dialect, name, params, body, kind)
         .ok_or_else(|| ExtractError::UnsupportedDialect(format!("{dialect:?}")))?;
     let call = call_form(name, params);
 
@@ -1373,26 +1375,59 @@ fn parse_anchor(token: &str) -> Option<crate::patch::Anchor> {
     })
 }
 
-/// The new-function wrapper for `dialect` (`None` if the dialect has no known
-/// def form). Only the wrapper is dialect-specific; `body` is the verbatim
-/// selection. A multi-line body (a sibling run, or a multi-line single form) is
-/// placed on its own line after the arglist so reindent lays it out as a proper
-/// body; a single-line body stays inline (the ADR-0034 one-liner).
-fn def_form(dialect: Dialect, name: &str, params: &[String], body: &str) -> Option<String> {
-    let ps = params.join(" ");
-    // Separator between the arglist and the body.
-    let sep = if body.contains('\n') { "\n" } else { " " };
+/// The definition-form shape families (ADR-0036): where the name, arglist, and
+/// its bracket go. `--kind` swaps the head but never the shape.
+#[derive(Clone, Copy)]
+enum DefShape {
+    /// `(HEAD NAME (params) body)` — Emacs Lisp / Common Lisp.
+    Flat,
+    /// `(HEAD (NAME params) body)` — the Scheme family.
+    Nested,
+    /// `(HEAD NAME [params] body)` — Clojure.
+    Bracket,
+}
+
+/// The plain-function head and shape family for `dialect` (`None` if the dialect
+/// has no known def form; `--kind` does not unlock these — the bracket/nesting is
+/// unknown).
+fn def_shape(dialect: Dialect) -> Option<(&'static str, DefShape)> {
     Some(match dialect {
-        Dialect::EmacsLisp | Dialect::CommonLisp => format!("(defun {name} ({ps}){sep}{body})"),
+        Dialect::EmacsLisp | Dialect::CommonLisp => ("defun", DefShape::Flat),
         Dialect::Scheme
         | Dialect::Guile
         | Dialect::Racket
         | Dialect::Gauche
         | Dialect::Mosh
         | Dialect::Gambit
-        | Dialect::SchemeSuperset => format!("(define ({name} {ps}){sep}{body})"),
-        Dialect::Clojure => format!("(defn {name} [{ps}]{sep}{body})"),
+        | Dialect::SchemeSuperset => ("define", DefShape::Nested),
+        Dialect::Clojure => ("defn", DefShape::Bracket),
         _ => return None,
+    })
+}
+
+/// The new-function wrapper for `dialect` (`None` if the dialect has no known
+/// def form). Only the wrapper is dialect-specific; `body` is the verbatim
+/// selection. `kind` overrides the head within the dialect's shape family
+/// (ADR-0036), defaulting to the plain-function head. A multi-line body (a sibling
+/// run, or a multi-line single form) is placed on its own line after the arglist so
+/// reindent lays it out as a proper body; a single-line body stays inline (the
+/// ADR-0034 one-liner).
+fn def_form(
+    dialect: Dialect,
+    name: &str,
+    params: &[String],
+    body: &str,
+    kind: Option<&str>,
+) -> Option<String> {
+    let (default_head, shape) = def_shape(dialect)?;
+    let head = kind.unwrap_or(default_head);
+    let ps = params.join(" ");
+    // Separator between the arglist and the body.
+    let sep = if body.contains('\n') { "\n" } else { " " };
+    Some(match shape {
+        DefShape::Flat => format!("({head} {name} ({ps}){sep}{body})"),
+        DefShape::Nested => format!("({head} ({name} {ps}){sep}{body})"),
+        DefShape::Bracket => format!("({head} {name} [{ps}]{sep}{body})"),
     })
 }
 
@@ -1786,7 +1821,8 @@ mod tests {
         // A run of two body forms `(foo) (bar)` → one niladic helper called once.
         let (_d, path) = write_temp("a.el", "(defun main ()\n  (foo)\n  (bar)\n  (baz))\n");
         let a = anchor_for("(foo)", 2);
-        extract_block_into_function(&path, &a, "foo-bar", &[], 2, Dialect::EmacsLisp).unwrap();
+        extract_block_into_function(&path, &a, "foo-bar", &[], 2, None, Dialect::EmacsLisp)
+            .unwrap();
         let r = std::fs::read_to_string(&path).unwrap();
         // The multi-form run lands on its own body lines, before the enclosing defun,
         // and `main`'s run is replaced by one call (`(baz)` untouched).
@@ -1801,7 +1837,7 @@ mod tests {
         // A run of two *top-level* forms (parent is None → siblings are the data).
         let (_d, path) = write_temp("a.el", "(foo)\n(bar)\n(baz)\n");
         let a = anchor_for("(foo)", 1);
-        extract_block_into_function(&path, &a, "setup", &[], 2, Dialect::EmacsLisp).unwrap();
+        extract_block_into_function(&path, &a, "setup", &[], 2, None, Dialect::EmacsLisp).unwrap();
         let r = std::fs::read_to_string(&path).unwrap();
         // Def inserted before the run; the run replaced by the call; `(baz)` stays.
         assert!(r.starts_with("(defun setup ()"), "{r}");
@@ -1819,8 +1855,16 @@ mod tests {
         let (_d2, p2) = write_temp("b.el", src);
         let a = anchor_for("(* (+ x 1) 2)", 3);
         extract_into_function(&p1, &a, "compute", &["x".into()], Dialect::EmacsLisp).unwrap();
-        extract_block_into_function(&p2, &a, "compute", &["x".into()], 1, Dialect::EmacsLisp)
-            .unwrap();
+        extract_block_into_function(
+            &p2,
+            &a,
+            "compute",
+            &["x".into()],
+            1,
+            None,
+            Dialect::EmacsLisp,
+        )
+        .unwrap();
         assert_eq!(
             std::fs::read_to_string(&p1).unwrap(),
             std::fs::read_to_string(&p2).unwrap()
@@ -1833,7 +1877,7 @@ mod tests {
         let a = anchor_for("(bar)", 3);
         // Only one sibling remains from `(bar)`; a run of 2 crosses the group's end.
         assert!(matches!(
-            extract_block_into_function(&path, &a, "h", &[], 2, Dialect::EmacsLisp),
+            extract_block_into_function(&path, &a, "h", &[], 2, None, Dialect::EmacsLisp),
             Err(ExtractError::RunExceedsSiblings {
                 asked: 2,
                 available: 1
@@ -1847,6 +1891,7 @@ mod tests {
                 "h",
                 &[],
                 0,
+                None,
                 Dialect::EmacsLisp
             ),
             Err(ExtractError::RunExceedsSiblings { asked: 0, .. })
@@ -1856,5 +1901,78 @@ mod tests {
             std::fs::read_to_string(&path).unwrap(),
             "(defun main ()\n  (foo)\n  (bar))\n"
         );
+    }
+
+    // ----- non-defun kinds via `kind` (ADR-0036) -----
+
+    #[test]
+    fn extract_kind_overrides_head_within_each_shape_family() {
+        // Flat (elisp): `defsubst` instead of `defun`, arglist in `(params)`.
+        let (_d, p1) = write_temp("a.el", "(defun foo (x)\n  (* x 2))\n");
+        extract_block_into_function(
+            &p1,
+            &anchor_for("(* x 2)", 2),
+            "dbl",
+            &["x".into()],
+            1,
+            Some("defsubst"),
+            Dialect::EmacsLisp,
+        )
+        .unwrap();
+        assert!(std::fs::read_to_string(&p1)
+            .unwrap()
+            .starts_with("(defsubst dbl (x) (* x 2))\n\n"));
+
+        // Nested (scheme): `define-inline` keeps the `(NAME params)` nesting.
+        let (_d, p2) = write_temp("a.scm", "(define (f x)\n  (+ x 1))\n");
+        extract_block_into_function(
+            &p2,
+            &anchor_for("(+ x 1)", 2),
+            "g",
+            &["x".into()],
+            1,
+            Some("define-inline"),
+            Dialect::Scheme,
+        )
+        .unwrap();
+        assert!(std::fs::read_to_string(&p2)
+            .unwrap()
+            .starts_with("(define-inline (g x) (+ x 1))\n\n"));
+
+        // Bracket (clojure): private `defn-` keeps the `[params]` bracket.
+        let (_d, p3) = write_temp("a.clj", "(defn f [x] (+ x 1))\n");
+        extract_block_into_function(
+            &p3,
+            &anchor_for("(+ x 1)", 1),
+            "g",
+            &["x".into()],
+            1,
+            Some("defn-"),
+            Dialect::Clojure,
+        )
+        .unwrap();
+        assert!(std::fs::read_to_string(&p3)
+            .unwrap()
+            .contains("(defn- g [x] (+ x 1))"));
+    }
+
+    #[test]
+    fn extract_kind_does_not_unlock_unsupported_dialects() {
+        // An unsupported dialect stays `UnsupportedDialect` even with `kind` set —
+        // its bracket/nesting is unknown, so `--kind` cannot rescue it.
+        let (_d, fnl) = write_temp("a.fnl", "(fn [x] (+ x 1))\n");
+        let a = anchor_for("(+ x 1)", 1);
+        assert!(matches!(
+            extract_block_into_function(
+                &fnl,
+                &a,
+                "g",
+                &["x".into()],
+                1,
+                Some("fn"),
+                Dialect::Fennel
+            ),
+            Err(ExtractError::UnsupportedDialect(_))
+        ));
     }
 }

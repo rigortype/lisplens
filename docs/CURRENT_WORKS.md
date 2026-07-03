@@ -20,9 +20,9 @@ on CI's stable** (`rustup update stable`; currently rustc 1.96.1) or the Format 
 fails on version drift; CI's Docs step is `cargo doc --no-deps` with
 `RUSTDOCFLAGS=-D warnings` (no public doc linking to a private item).
 
-**Quality gate (all green):** 135 tests, `cargo fmt --check`,
+**Quality gate (all green):** 137 tests, `cargo fmt --check`,
 `clippy --all-targets`, `RUSTDOCFLAGS=-D warnings cargo doc --no-deps`; tree clean.
-35 ADRs.
+36 ADRs.
 
 **Gotchas.**
 - A committed **PostToolUse hook** (`.claude/settings.json`, force-tracked past the
@@ -40,13 +40,31 @@ fails on version drift; CI's Docs step is `cargo doc --no-deps` with
 ADR-0034 (extract). Per-member detail below.
 
 **Candidate next work:** (a) remaining `extract` opt-ins — free-var inference
-(crosses the ADR-0003 ceiling; weigh carefully), multi-site extraction, non-`defun`
-kinds (block `anchor+count` extraction is now **done**, ADR-0035); (b) formatter
+(crosses the ADR-0003 ceiling; weigh carefully), multi-site extraction (block
+`anchor+count` extraction is **done**, ADR-0035; non-`defun` kinds are **done**,
+ADR-0036); (b) formatter
 long tail / native indenters for non-bundled dialects (Deferred list below);
 (c) move `calculate-lisp-indent` into `lispexp-emacs`
 (`docs/notes/20260704-delegation-boundary-review.md`).
 
 ## Now
+
+- **`extract --kind` landed** (ADR-0036) — `extract` gains an optional
+  `--kind HEAD` (MCP `kind`) that names the leading operator of the emitted
+  definition, defaulting to the dialect's plain-function head (so ADR-0034/0035
+  output is unchanged when absent). Only the **head** is swapped; the definition's
+  **shape family stays the dialect's**: Flat `(HEAD NAME (params) body)` (elisp/CL,
+  default `defun`; e.g. `defsubst`, `cl-defun`), Nested `(HEAD (NAME params) body)`
+  (Scheme, default `define`; e.g. `define-inline`), Bracket `(HEAD NAME [params]
+  body)` (Clojure, default `defn`; e.g. `defn-`). `HEAD` is **not validated** — any
+  symbol is placed verbatim (the ADR-0003 ceiling: user asserts semantics, lisplens
+  guarantees parse-safety, same as params / `rewrite` templates). Dialects with no
+  known shape family are still refused (`UnsupportedDialect`) — `--kind` does not
+  unlock them. `def_shape(dialect) -> Option<(default_head, DefShape)>` centralizes
+  the three families; `def_form` takes the `kind` override; `extract_block_into_function`
+  threads it; `extract_into_function` stays the `count=1`, `kind=None` wrapper. Wired
+  through CLI (`parse_extract_opts`) + MCP (`kind` field + inputSchema). 137 tests.
+  Deferred: free-var inference, multi-site, non-default placement, fold-repeats.
 
 - **Block extraction landed** (ADR-0035) — `extract` gains an optional
   `--count N` (MCP `count`, default 1): extract a run of `N` **contiguous sibling
