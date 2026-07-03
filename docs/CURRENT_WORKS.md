@@ -6,24 +6,23 @@ Codebase): `docs/dev/architecture.md`, `docs/dev/formatter.md`, `CONTEXT.md`,
 
 ## Handoff — resume here (2026-07-04 session end)
 
-**Git.** On branch **`design/extract-pattern-language`** at `b56f8d4`, **4 commits
-unpushed** ahead of `origin/master` (`6899b5f`); local `master` == `origin/master`
-(synced). The 4 unpushed commits are the **`rewrite` + `extract`** work:
-`9398d9c` rewrite design (ADR-0033) · `7f1a24a` rewrite impl · `2ea3fe2` rewrite
-cookbook (`docs/rewrite.md`) · `b56f8d4` extract (ADR-0034).
-`master`/`origin/master` already have: the polyglot formatter (EL/CL/Scheme +
-fallback, ADR-0031), display-width columns, the PostToolUse `cargo fmt` hook, and
-**merged PR #1** (`check`/`rename`/`inline` + ADR-0032).
+**Git.** On **`master`** at `aec32b9`, synced with `origin/master`; tree clean.
+**PR #2 is merged** (`aec32b9` merge commit) — the **`rewrite` + `extract`** work
+(`9398d9c` rewrite design ADR-0033 · `7f1a24a` rewrite impl · `2ea3fe2` rewrite
+cookbook `docs/rewrite.md` · `b56f8d4` extract ADR-0034), CI green. `master` now
+also has: the polyglot formatter (EL/CL/Scheme + fallback, ADR-0031), display-width
+columns, the PostToolUse `cargo fmt` hook, and **merged PR #1**
+(`check`/`rename`/`inline` + ADR-0032).
 
-**Immediate next step:** push the branch and open a PR for rewrite+extract (like
-PR #1). CI runs `cargo fmt --check` on `dtolnay/rust-toolchain@stable` — **keep the
-local toolchain on CI's stable** (`rustup update stable`; currently rustc 1.96.1)
-or the Format step fails on version drift; CI's Docs step is `cargo doc --no-deps`
-with `RUSTDOCFLAGS=-D warnings` (no public doc linking to a private item).
+**Immediate next step:** pick from the candidate next work below. CI runs
+`cargo fmt --check` on `dtolnay/rust-toolchain@stable` — **keep the local toolchain
+on CI's stable** (`rustup update stable`; currently rustc 1.96.1) or the Format step
+fails on version drift; CI's Docs step is `cargo doc --no-deps` with
+`RUSTDOCFLAGS=-D warnings` (no public doc linking to a private item).
 
-**Quality gate (all green):** 131 tests, `cargo fmt --check`,
+**Quality gate (all green):** 135 tests, `cargo fmt --check`,
 `clippy --all-targets`, `RUSTDOCFLAGS=-D warnings cargo doc --no-deps`; tree clean.
-34 ADRs.
+35 ADRs.
 
 **Gotchas.**
 - A committed **PostToolUse hook** (`.claude/settings.json`, force-tracked past the
@@ -40,13 +39,30 @@ with `RUSTDOCFLAGS=-D warnings` (no public doc linking to a private item).
 (rewrite pattern language + `CONTEXT.md` vocabulary + `docs/rewrite.md` cookbook),
 ADR-0034 (extract). Per-member detail below.
 
-**Candidate next work:** (a) PR + merge the rewrite/extract branch; (b) `extract`
-future opt-ins — free-var inference (crosses the ADR-0003 ceiling; weigh
-carefully), block `anchor+count` extraction, non-`defun` kinds; (c) formatter long
-tail / native indenters for non-bundled dialects (Deferred list below); (d) move
-`calculate-lisp-indent` into `lispexp-emacs` (`docs/notes/20260704-delegation-boundary-review.md`).
+**Candidate next work:** (a) remaining `extract` opt-ins — free-var inference
+(crosses the ADR-0003 ceiling; weigh carefully), multi-site extraction, non-`defun`
+kinds (block `anchor+count` extraction is now **done**, ADR-0035); (b) formatter
+long tail / native indenters for non-bundled dialects (Deferred list below);
+(c) move `calculate-lisp-indent` into `lispexp-emacs`
+(`docs/notes/20260704-delegation-boundary-review.md`).
 
 ## Now
+
+- **Block extraction landed** (ADR-0035) — `extract` gains an optional
+  `--count N` (MCP `count`, default 1): extract a run of `N` **contiguous sibling
+  forms** starting at the anchor into `(defun NAME (PARAMS) form₁ … form_N)`,
+  replacing the run with one `(NAME PARAMS)` call. Same pure cut+wrap as ADR-0034
+  (no free-var inference); the run is resolved from the anchored node's parent +
+  index (top-level forms when the anchor is top-level), and refused with
+  `RunExceedsSiblings` if it crosses the sibling group (no partial write). `count=1`
+  reproduces the single-form path exactly. `def_form` now places a **multi-line
+  body on its own line** (a run, or a multi-line single form) so reindent lays it
+  out conventionally; single-line bodies stay inline (ADR-0034 one-liner unchanged).
+  `extract_block_into_function` in `src/refactor.rs`; `extract_into_function` is the
+  `count=1` wrapper. 135 tests. Value = only in a body/`progn` position (implicit
+  progn → last form's value). Deferred: free-var inference, multi-site, non-`defun`
+  kinds; and the distinct *fold-repeats-into-a-loop* transform (`(foo)(foo)(foo)` →
+  `(dotimes …)`), parked until a real need.
 
 - **`extract` implemented** (ADR-0034) — the last ADR-0032 member: `lisplens
   extract <file> <anchor> <name> [param...]` (+ MCP `extract`) pulls the form at

@@ -1197,6 +1197,9 @@ pub enum ExtractError {
     BadAnchor(String),
     /// No form matched the anchor.
     AnchorNotFound(String),
+    /// The requested run (`anchor + count`) extends past the anchored form's
+    /// sibling group. Carries the count asked for and the count available.
+    RunExceedsSiblings { asked: usize, available: usize },
     /// The dialect has no known function-definition form yet.
     UnsupportedDialect(String),
     /// The edits could not be spliced.
@@ -1212,6 +1215,10 @@ impl std::fmt::Display for ExtractError {
         match self {
             ExtractError::BadAnchor(a) => write!(f, "anchor `{a}` is not `line:hash[:ordinal]`"),
             ExtractError::AnchorNotFound(a) => write!(f, "no form at anchor `{a}`"),
+            ExtractError::RunExceedsSiblings { asked, available } => write!(
+                f,
+                "run of {asked} exceeds the {available} sibling form(s) at the anchor"
+            ),
             ExtractError::UnsupportedDialect(d) => write!(f, "extract not supported for {d} yet"),
             ExtractError::Splice(e) => write!(f, "splice failed: {e:?}"),
             ExtractError::Write(e) => write!(f, "{e:?}"),
@@ -1238,6 +1245,23 @@ pub fn extract_into_function(
     params: &[String],
     dialect: Dialect,
 ) -> Result<ExtractOutcome, ExtractError> {
+    extract_block_into_function(path, anchor, name, params, 1, dialect)
+}
+
+/// Extract the run of `count` contiguous sibling forms starting at `anchor` into a
+/// new function `name` (ADR-0035). The generalization of [`extract_into_function`]
+/// (which is the `count == 1` case): the run is wrapped verbatim as an implicit
+/// `progn` body, so it is behaviour-preserving only in a body/`progn` position.
+/// Errors, and never partially writes, if the run crosses the anchored form's
+/// sibling group.
+pub fn extract_block_into_function(
+    path: &Path,
+    anchor: &str,
+    name: &str,
+    params: &[String],
+    count: usize,
+    dialect: Dialect,
+) -> Result<ExtractOutcome, ExtractError> {
     let source = std::fs::read_to_string(path).map_err(ExtractError::Io)?;
     let options = Options::for_dialect(dialect);
     let parsed = parse(&source, &options);
@@ -1245,7 +1269,7 @@ pub fn extract_into_function(
     let anchor_val = parse_anchor(anchor).ok_or_else(|| ExtractError::BadAnchor(anchor.into()))?;
     let located = crate::resolve::resolve(&source, &parsed.data, &anchor_val)
         .ok_or_else(|| ExtractError::AnchorNotFound(anchor.into()))?;
-    let sel = span_of(located.node);
+    let sel = run_span(&parsed.data, &located, count)?;
 
     // The enclosing top-level form (the def is inserted just before it); falls
     // back to the selection itself when the form is already top-level.
@@ -1293,6 +1317,46 @@ pub fn extract_into_function(
     })
 }
 
+/// The source span of the run of `count` contiguous sibling forms starting at the
+/// located node (ADR-0035). `count == 1` returns exactly the node's own span (the
+/// ADR-0034 single-form case). The sibling group is the anchored form's parent list
+/// items, or the top-level `data` when the anchor is a top-level form; the run is
+/// `siblings[index .. index + count]`. Errors if `count == 0` or the run would cross
+/// the sibling group's end — no partial write can follow.
+fn run_span(
+    data: &[Datum],
+    located: &crate::resolve::Located,
+    count: usize,
+) -> Result<Range<usize>, ExtractError> {
+    if count == 0 {
+        return Err(ExtractError::RunExceedsSiblings {
+            asked: 0,
+            available: 0,
+        });
+    }
+    if count == 1 {
+        return Ok(span_of(located.node));
+    }
+    let siblings: &[Datum] = match located.parent {
+        Some(p) => match &p.kind {
+            DatumKind::List { items, .. } => items,
+            _ => std::slice::from_ref(located.node),
+        },
+        None => data,
+    };
+    let idx = located.index.unwrap_or(0);
+    let available = siblings.len().saturating_sub(idx);
+    if count > available {
+        return Err(ExtractError::RunExceedsSiblings {
+            asked: count,
+            available,
+        });
+    }
+    let first = &siblings[idx];
+    let last = &siblings[idx + count - 1];
+    Ok(first.span.start as usize..last.span.end as usize)
+}
+
 /// Parse a `line:hash[:ordinal]` anchor string.
 fn parse_anchor(token: &str) -> Option<crate::patch::Anchor> {
     let mut parts = token.split(':');
@@ -1311,19 +1375,23 @@ fn parse_anchor(token: &str) -> Option<crate::patch::Anchor> {
 
 /// The new-function wrapper for `dialect` (`None` if the dialect has no known
 /// def form). Only the wrapper is dialect-specific; `body` is the verbatim
-/// selection.
+/// selection. A multi-line body (a sibling run, or a multi-line single form) is
+/// placed on its own line after the arglist so reindent lays it out as a proper
+/// body; a single-line body stays inline (the ADR-0034 one-liner).
 fn def_form(dialect: Dialect, name: &str, params: &[String], body: &str) -> Option<String> {
     let ps = params.join(" ");
+    // Separator between the arglist and the body.
+    let sep = if body.contains('\n') { "\n" } else { " " };
     Some(match dialect {
-        Dialect::EmacsLisp | Dialect::CommonLisp => format!("(defun {name} ({ps}) {body})"),
+        Dialect::EmacsLisp | Dialect::CommonLisp => format!("(defun {name} ({ps}){sep}{body})"),
         Dialect::Scheme
         | Dialect::Guile
         | Dialect::Racket
         | Dialect::Gauche
         | Dialect::Mosh
         | Dialect::Gambit
-        | Dialect::SchemeSuperset => format!("(define ({name} {ps}) {body})"),
-        Dialect::Clojure => format!("(defn {name} [{ps}] {body})"),
+        | Dialect::SchemeSuperset => format!("(define ({name} {ps}){sep}{body})"),
+        Dialect::Clojure => format!("(defn {name} [{ps}]{sep}{body})"),
         _ => return None,
     })
 }
@@ -1709,5 +1777,84 @@ mod tests {
             std::fs::read_to_string(&path).unwrap(),
             "(defun foo (x) (g x))\n"
         ); // untouched
+    }
+
+    // ----- block extraction, anchor + count (ADR-0035) -----
+
+    #[test]
+    fn extract_block_of_siblings_in_a_body() {
+        // A run of two body forms `(foo) (bar)` → one niladic helper called once.
+        let (_d, path) = write_temp("a.el", "(defun main ()\n  (foo)\n  (bar)\n  (baz))\n");
+        let a = anchor_for("(foo)", 2);
+        extract_block_into_function(&path, &a, "foo-bar", &[], 2, Dialect::EmacsLisp).unwrap();
+        let r = std::fs::read_to_string(&path).unwrap();
+        // The multi-form run lands on its own body lines, before the enclosing defun,
+        // and `main`'s run is replaced by one call (`(baz)` untouched).
+        assert_eq!(
+            r,
+            "(defun foo-bar ()\n  (foo)\n  (bar))\n\n(defun main ()\n  (foo-bar)\n  (baz))\n"
+        );
+    }
+
+    #[test]
+    fn extract_block_top_level_run() {
+        // A run of two *top-level* forms (parent is None → siblings are the data).
+        let (_d, path) = write_temp("a.el", "(foo)\n(bar)\n(baz)\n");
+        let a = anchor_for("(foo)", 1);
+        extract_block_into_function(&path, &a, "setup", &[], 2, Dialect::EmacsLisp).unwrap();
+        let r = std::fs::read_to_string(&path).unwrap();
+        // Def inserted before the run; the run replaced by the call; `(baz)` stays.
+        assert!(r.starts_with("(defun setup ()"), "{r}");
+        assert!(r.contains("(setup)"), "{r}");
+        assert!(r.contains("(baz)"), "{r}");
+        assert_eq!(r.matches("(foo)").count(), 1, "{r}");
+        assert_eq!(r.matches("(bar)").count(), 1, "{r}");
+    }
+
+    #[test]
+    fn extract_block_count_one_equals_single_form() {
+        // count == 1 must reproduce the ADR-0034 single-form path exactly.
+        let src = "(defun foo (x)\n  (message \"hi\")\n  (* (+ x 1) 2))\n";
+        let (_d, p1) = write_temp("a.el", src);
+        let (_d2, p2) = write_temp("b.el", src);
+        let a = anchor_for("(* (+ x 1) 2)", 3);
+        extract_into_function(&p1, &a, "compute", &["x".into()], Dialect::EmacsLisp).unwrap();
+        extract_block_into_function(&p2, &a, "compute", &["x".into()], 1, Dialect::EmacsLisp)
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&p1).unwrap(),
+            std::fs::read_to_string(&p2).unwrap()
+        );
+    }
+
+    #[test]
+    fn extract_block_rejects_run_past_siblings_and_zero_count() {
+        let (_d, path) = write_temp("a.el", "(defun main ()\n  (foo)\n  (bar))\n");
+        let a = anchor_for("(bar)", 3);
+        // Only one sibling remains from `(bar)`; a run of 2 crosses the group's end.
+        assert!(matches!(
+            extract_block_into_function(&path, &a, "h", &[], 2, Dialect::EmacsLisp),
+            Err(ExtractError::RunExceedsSiblings {
+                asked: 2,
+                available: 1
+            })
+        ));
+        // count == 0 is rejected too.
+        assert!(matches!(
+            extract_block_into_function(
+                &path,
+                &anchor_for("(foo)", 2),
+                "h",
+                &[],
+                0,
+                Dialect::EmacsLisp
+            ),
+            Err(ExtractError::RunExceedsSiblings { asked: 0, .. })
+        ));
+        // No partial write on either refusal.
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "(defun main ()\n  (foo)\n  (bar))\n"
+        );
     }
 }
