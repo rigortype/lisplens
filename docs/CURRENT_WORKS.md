@@ -20,9 +20,9 @@ on CI's stable** (`rustup update stable`; currently rustc 1.96.1) or the Format 
 fails on version drift; CI's Docs step is `cargo doc --no-deps` with
 `RUSTDOCFLAGS=-D warnings` (no public doc linking to a private item).
 
-**Quality gate (all green):** 149 tests, `cargo fmt --check`,
+**Quality gate (all green):** 155 tests, `cargo fmt --check`,
 `clippy --all-targets`, `RUSTDOCFLAGS=-D warnings cargo doc --no-deps`; tree clean.
-38 ADRs.
+39 ADRs.
 
 **Gotchas.**
 - A committed **PostToolUse hook** (`.claude/settings.json`, force-tracked past the
@@ -50,6 +50,27 @@ long tail / native indenters for non-bundled dialects (Deferred list below);
 (`docs/notes/20260704-delegation-boundary-review.md`).
 
 ## Now
+
+- **Native Clojure indent engine landed** (ADR-0039) — Clojure no longer rides the
+  generic Emacs Lisp fallback; `Engine::Clojure` (`src/format/clojure.rs`) is a
+  native port of **cljfmt's** semantic `:inner`/`:block` model (the standard the
+  whole ecosystem — cljfmt, clojure-ts-mode, cljstyle, modern clojure-mode —
+  converged on), and Clojure joins `has_native_engine` so `.clj/.cljs/.cljc`
+  auto-reindent on Structural edit. Unlike the CL/Scheme engines this is **not** an
+  Emacs port and the oracle is **not** Emacs: it targets **cljfmt** (`cljfmt fix`, a
+  native GraalVM binary — no JVM), whose `indents/clojure.clj` table is bundled
+  verbatim. The model (empirically pinned vs cljfmt 0.16.4): collections + `#?(…)`
+  align under the first element; round lists/`#(…)` are the call model — default
+  aligns under arg 0 (threading `->`/`->>` included), `[:inner 0]` bodies +2,
+  `[:inner D]`/`[:inner D idx]` walk up ≤3 levels (reify/letfn), `[:block N]`
+  specials use default and body +2 only when the first body form begins a line
+  (this is where `:block` differs from Emacs's integer spec — no double-indent).
+  Verified **byte-exact vs cljfmt** on broad corpora (ns/require, destructuring,
+  nested let/try, threading, defmulti/deftype/reify/letfn, defmacro+backquote,
+  condp, reader conditionals). 155 tests (6 Clojure goldens). Survey:
+  `docs/notes/20260704-clojure-indentation-survey.md`. Deferred: the fixed/Tonsky
+  style flag, map/binding column alignment, `edn`-specific handling, per-project
+  `:extra-indents`, and comment-only-line parity.
 
 - **`extract --also` (generalizing multi-site / anti-unification) landed**
   (ADR-0038) — `extract` gains a repeatable `--also ANCHOR` (MCP `also: []`): the
@@ -328,10 +349,11 @@ parked. In rough priority for whenever it is picked up again:
    is off; a niche reader construct, engine-agnostic. (The other cross-cutting
    gap, byte- vs display-column measurement, is now **fixed** — see the
    display-width bullet above.)
-5. **Native indenters for the non-bundled dialects** (Clojure/Fennel/Janet/Hy/LFE/
-   …), which currently ride the generic Emacs Lisp fallback. Emacs bundles no
+5. **Native indenters for the remaining non-bundled dialects** (Fennel/Janet/Hy/
+   LFE/…), which currently ride the generic Emacs Lisp fallback. Emacs bundles no
    oracle for them, so each needs its own reference + spec (a separate,
-   design-first effort per family). Not required for the Emacs-bundled scope.
+   design-first effort per family). **Clojure is now done** (ADR-0039, cljfmt
+   oracle). Not required for the Emacs-bundled scope.
 6. **MCP edit JSON op-array** (ADR-0019) and **S-expr structural addresses**
    (ADR-0018 defers these). Each is its own design-first chunk on a separate
    surface.

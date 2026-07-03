@@ -6,20 +6,21 @@ ADR-0025–0028, **ADR-0031** (multi-dialect dispatch). Config: ADR-0029.
 The formatter is **one shared driver + a dialect-selected engine** (ADR-0031).
 `format::format(source, &FormatConfig, dialect) -> String` picks the engine via
 `engine_for`; `reindent*` thread the same `dialect`. `format_elisp*` remain as
-Emacs Lisp shims (Nameless is Emacs Lisp-only, ADR-0030). Emacs bundles three
-distinct Lisp indenters and each is one engine here:
+Emacs Lisp shims (Nameless is Emacs Lisp-only, ADR-0030). Three engines port an
+Emacs indenter; a fourth (Clojure) ports cljfmt:
 
-| engine | Emacs source | dialects |
+| engine | oracle / source | dialects |
 | --- | --- | --- |
 | `Engine::Elisp` | `lisp-mode.el` `lisp-indent-function` | Emacs Lisp + **generic fallback** for the rest |
 | `Engine::CommonLisp` | `cl-indent.el` `common-lisp-indent-function` | Common Lisp |
 | `Engine::Scheme` | `scheme.el` `scheme-indent-function` | Scheme, Guile, Racket, Gauche, Mosh, Gambit, superset |
+| `Engine::Clojure` | **cljfmt** `:inner`/`:block` (ADR-0039) | Clojure |
 
 The driver (`src/format/mod.rs`) owns the per-line loop, string/comment rules,
 touched-region masking, `Cols` column arithmetic, and rendering; each engine only
 answers "what column does this code line indent to?". `has_native_engine`
-(Emacs Lisp, Common Lisp, and the Scheme family) gates auto-format-on-edit — the
-generic fallback formats only on an explicit `format` (ADR-0031).
+(Emacs Lisp, Common Lisp, the Scheme family, and Clojure) gates auto-format-on-edit
+— the generic fallback formats only on an explicit `format` (ADR-0031).
 
 ## Emacs Lisp engine
 
@@ -232,6 +233,35 @@ continuations land byte-exact. ASCII is unchanged (display width == byte length)
 The `Cols::col` inputs stay byte offsets (lispexp's `LineIndex` is byte-based);
 only the width *measurement* of the content slice is display-aware.
 
+## Clojure engine (ADR-0039)
+
+`src/format/clojure.rs` — **not** an Emacs port. Emacs bundles no Clojure indenter,
+so this engine targets **cljfmt** (the formatter Clojure developers run, and the
+origin of the model the whole ecosystem — clojure-ts-mode, cljstyle, modern
+clojure-mode — converged on). The survey is `docs/notes/20260704-clojure-indentation-survey.md`.
+
+The model is cljfmt's `:inner`/`:block` rules, a **pure function of the s-expression
+tree** (no tree-sitter, no Emacs). To indent a line inside innermost container `c`
+(`open` = `c`'s open-delimiter column; value children counted, so comments/`#_`/
+metadata never consume a slot):
+
+- **collections** `[]`/`{}`/`#{}` and reader conditionals `#?(…)`/`#?@(…)` → align
+  under the first element;
+- **round lists / `#(…)`** are the *call* model: **default** aligns continuations
+  under arg 0 (or `open + 1` when the head is alone), threading `->`/`->>` included;
+  **`[:inner 0]`** (`defn`, `fn`) → every direct child `open + 2`; **`[:inner D]`**
+  / **`[:inner D idx]`** (`reify`, `letfn`, …) → a rule on the form `D+1` levels up
+  gives `open + 2`; **`[:block N]`** → args `< N` are special (default), args `≥ N`
+  are body (`open + 2`) only when the first body form begins its own line, else the
+  form falls back to default. Namespaces are stripped for lookup; unknown
+  `def…`/`with-…` heads hit the regex fallback (`[:inner 0]`).
+
+The bundled table `rules_for` is cljfmt's `indents/clojure.clj` (plus the merged
+`compojure.clj`/`fuzzy.clj` defaults), verbatim. `[:block N]` differs from Emacs's
+integer spec: it does **not** double-indent the special args. Fidelity is validated
+against `cljfmt fix` — see the harness section. Known limitation: comment-only line
+indentation is the shared driver's and may differ from cljfmt in edge cases.
+
 ## Fidelity harness (the main tool for first release)
 
 Emacs binary: `/Applications/Emacs.app/Contents/MacOS/Emacs`. For each file:
@@ -290,6 +320,29 @@ diff mine.el em.el
   majority of files are byte-exact; residual diffs are the `%define-syntax`
   flat-harness artifact above, or corpora indented under non-default settings
   (cross-check against the original file, per the note below).
+- The **Clojure** engine's oracle is **cljfmt** (`cljfmt fix`), not Emacs — a
+  native GraalVM binary (no JVM needed). Disable cljfmt's non-indentation passes so
+  the diff isolates indentation, then compare a de-indented copy reformatted by each
+  (both from-scratch and as a fixed point on the already-formatted file):
+
+  ```sh
+  LL=target/debug/lisplens
+  cat > .cljfmt.edn <<'EDN'
+  {:remove-surrounding-whitespace? false :remove-trailing-whitespace? false
+   :insert-missing-whitespace? false :remove-consecutive-blank-lines? false
+   :remove-multiple-non-indenting-spaces? false :sort-ns-references? false
+   :indentation? true}
+  EDN
+  sed 's/^[[:space:]]*//' SRC.clj > mine.clj; cp mine.clj cf.clj
+  cljfmt fix cf.clj; $LL format mine.clj
+  diff cf.clj mine.clj
+  ```
+
+  On broad realistic corpora (ns/require, destructuring, nested `let`/`try`,
+  threading, `defmulti`/`defmethod`, `deftype`/`reify`/`letfn`, `defmacro` with
+  backquote, `condp`, `#(…)`, `#?(…)`) lisplens is byte-exact vs cljfmt. Known
+  limitation: comment-only lines are the shared driver's, not the engine's, and can
+  differ from cljfmt.
 - For a Nameless corpus (`~/repo/emacs/php-mode/lisp`), format with
   `lisplens format --nameless` and enable Nameless on the Emacs side:
   `-l nameless.el … (nameless-mode 1) (font-lock-ensure)` **before**
@@ -328,9 +381,9 @@ harness. Note the harness's Emacs side can't see a file's own `(declare (indent
 …))` (it doesn't evaluate the file), so a file that indents by its own macros
 will show harness diffs where lisplens is in fact right — cross-check against the
 original. The **Common Lisp** and **Scheme-family** engines are both landed
-(ADR-0031, see above); the remaining dialects Emacs has no indenter for (Clojure,
-Fennel, Janet, Hy, LFE, …) ride the generic Emacs Lisp fallback until they get
-one.
+(ADR-0031, see above), and **Clojure** has its own engine (ADR-0039, cljfmt
+oracle); the remaining dialects Emacs has no indenter for (Fennel, Janet, Hy, LFE,
+…) ride the generic Emacs Lisp fallback until they get one.
 
 ## Touched-region reindent (ADR-0025/0028)
 
