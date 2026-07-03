@@ -217,17 +217,20 @@ function-call column `scheme-mode` produces from a clean buffer. Cross-check suc
 diffs against the original file or a fixed-point reindent, exactly like the CL
 `defmethod` caveat below.
 
-Two further residual gaps, both narrow and not Scheme-specific:
+One residual gap, narrow and not Scheme-specific:
 
-- **Multi-byte columns.** `Cols::col` measures in *byte* columns (lispexp's
-  `LineIndex` is byte-based), but Emacs aligns by *display* columns, so an
-  alignment target on a line containing a multi-byte glyph (`λ`, non-ASCII) can be
-  off by the glyph's extra bytes — e.g. a `(λ (…)` body one column too deep. This
-  affects every engine equally; closing it means teaching `Cols::col` char/display
-  widths.
 - **Racket infix dots** `(a . op . b)` (two dots in one list) — the continuation
   of such a form is off; a niche reader construct outside `scheme-mode`'s own
   model.
+
+**Multi-byte columns are handled** (shared, all engines): `Cols::col` measures the
+line content up to each position by **display width** (East Asian Width, via
+`unicode-width`), not UTF-8 byte length, matching Emacs's `current-column`. So a
+wide/multi-byte glyph before an alignment target advances the column as Emacs
+would — `漢`/`Ａ` = 2, `λ`/`☆` (ambiguous) = 1 — and `(λλλλ arg` / `(漢漢漢漢 arg`
+continuations land byte-exact. ASCII is unchanged (display width == byte length).
+The `Cols::col` inputs stay byte offsets (lispexp's `LineIndex` is byte-based);
+only the width *measurement* of the content slice is display-aware.
 
 ## Fidelity harness (the main tool for first release)
 

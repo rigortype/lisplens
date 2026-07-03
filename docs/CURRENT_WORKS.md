@@ -6,6 +6,31 @@ Codebase): `docs/dev/architecture.md`, `docs/dev/formatter.md`, `CONTEXT.md`,
 
 ## Now
 
+- **Polyglot native formatter — every Emacs-bundled Lisp indenter now has an
+  engine** (ADR-0031, 2026-07-04). The formatter dispatches by dialect over one
+  shared driver + three faithful engines: Emacs Lisp (`lisp-indent-function`),
+  Common Lisp (`common-lisp-indent-function`), and the Scheme family
+  (`scheme-indent-function`) — all three validated byte-exact against their Emacs
+  major mode. Dialects Emacs bundles no indenter for
+  (Clojure/Fennel/Janet/Hy/LFE/Phel/ISLisp/AutoLisp) ride the Emacs Lisp engine as
+  the generic fallback (explicit `format` only; auto-format-on-edit is gated to
+  `has_native_engine`). CL was built hands-on; the Scheme engine was delegated to
+  a subagent (isolated worktree) and reviewed before merge. State: on **`master`**,
+  **unpushed** — 2 commits ahead of `origin/master` (`6a7be54` CL, `412bec2`
+  Scheme); `origin/master` still at `d4a4da4`. `cargo fmt --check` /
+  `clippy --all-targets` clean. Per-engine detail below.
+- **Display-width columns** (all engines, `unicode-width`): `Cols::col` now
+  measures line content by East Asian Width, matching Emacs's `current-column`,
+  so a wide/multi-byte glyph before an alignment target advances the column as
+  Emacs would (`漢`/`Ａ` = 2, `λ`/`☆` ambiguous = 1). `(λλλλ arg` / `(漢漢漢漢 arg`
+  continuations are now byte-exact vs Emacs; ASCII output is unchanged (0
+  divergence re-formatting 80 magit/cl-ppcre/gauche files against the pre-fix
+  binary). 107 tests (1 new multibyte golden). Closes the byte-column half of the
+  former cross-cutting gap; only Racket infix dots remain. `col` runs
+  `unicode-width` on every call — an ASCII byte-length fast path was benchmarked
+  and **reverted** as not worth the state (~1–3 % of the indent pass on a 620 KB
+  file; the real cost is `container_at`'s per-line tree re-descent). See
+  `docs/notes/20260704-formatter-width-perf.md`.
 - **Scheme-family indenter landed** (ADR-0031, 2026-07-04): `src/format/scheme.rs`
   — a faithful Rust port of `scheme-indent-function` (`scheme.el`), the *Emacs
   Lisp* algorithm with a Scheme spec table, `syntax-rules`/`def…` → defun, and the
@@ -25,11 +50,19 @@ Codebase): `docs/dev/architecture.md`, `docs/dev/formatter.md`, `CONTEXT.md`,
   indented under non-default settings. The remaining dialects Emacs bundles no
   indenter for (Clojure/Fennel/Janet/Hy/LFE/…) still ride the generic Emacs Lisp
   fallback. 106 tests pass (5 new Scheme goldens, captured from the Emacs oracle).
-  Two shared-helper refinements (both regression-checked against the Elisp/CL
-  goldens): `head_is_symbol_like` now treats a `#\`-char literal as data (Scheme)
-  but a `?`-char as symbol-like (Emacs Lisp); `whitespace-after-open-paren` counts
-  only a same-line space/tab, not a trailing newline; `container_at` descends into
-  `#(…)`/`#u8(…)` vectors.
+  The engine also carried a few **shared-helper** refinements, all
+  regression-checked by re-formatting 47 magit/lem Elisp + 25 cl-ppcre CL files
+  with the pre- and post-merge binaries (**0 output divergence** on both corpora):
+  `head_is_symbol_like` now treats a `#\`-char literal as data (Scheme) but a
+  `?`-char as symbol-like (Emacs Lisp); `whitespace-after-open-paren` counts only a
+  same-line space/tab, not a trailing newline; `container_at` descends into
+  `#(…)`/`#u8(…)` vectors; and `specform`'s body-form branch was corrected — when
+  the first body form shares the head's line it now falls to `normal-indent`
+  (align under the previous element) instead of under that first body form. That
+  last one is a **latent Emacs Lisp fix**, verified against the oracle:
+  `(when cond (a)⏎(b))` now lands `(b)` at col 6 (Emacs) where the old shared code
+  gave col 11 (it just never occurred in the magit/lem corpus, so no golden caught
+  it).
 - **Common Lisp indenter landed** (ADR-0031, 2026-07-04): the formatter is now
   **one shared driver + a dialect-selected engine**. `src/format.rs` became
   `src/format/mod.rs` (driver + Emacs Lisp engine) plus `src/format/commonlisp.rs`
@@ -42,8 +75,8 @@ Codebase): `docs/dev/architecture.md`, `docs/dev/formatter.md`, `CONTEXT.md`,
   `has_native_engine` (Emacs Lisp, Common Lisp). Byte-exact vs Emacs `lisp-mode`
   on `cl-ppcre` + the `gpg`/`gpgme` CL sources (residual diffs are the
   `lisp-indent-defmethod` flat-harness caveat, trailing newlines, or two
-  documented gaps). **Next: the Scheme-family engine (`scheme-indent-function`),
-  then the remaining dialects.**
+  documented gaps). This was the first engine after Emacs Lisp and the template
+  for the Scheme engine above.
 - **Released 0.1.0** (2026-07-03) — on [crates.io](https://crates.io/crates/lisplens)
   (`cargo install lisplens`) and as pre-built binaries on the GitHub Release for
   x86_64/aarch64 Linux + macOS and x86_64 Windows. Tag `vX.Y.Z` → GitHub Actions
@@ -65,8 +98,9 @@ Codebase): `docs/dev/architecture.md`, `docs/dev/formatter.md`, `CONTEXT.md`,
   clean. 31 ADRs.
 - **Touched-region auto-format on Structural edit (ADR-0025/0028) is wired**:
   `apply_struct_patch` reindents the top-level forms an edit fell within
-  (`format::reindent_range` + `edit::splice_tracked`), Emacs Lisp only, others
-  byte-identical; Line-hash stays literal (ADR-0027).
+  (`format::reindent_range` + `edit::splice_tracked`), for dialects with a
+  faithful native engine (`has_native_engine`: Emacs Lisp, Common Lisp, the Scheme
+  family); other dialects stay byte-identical; Line-hash stays literal (ADR-0027).
 - **`format <anchor>` Structural verb (ADR-0028 point 3)**: reindent exactly one
   anchored form in place — even nested, in full context (`format::reindent_block`,
   the `exact` scope of `Touched`). Carried as an identity edit so it shares the
@@ -120,6 +154,14 @@ parked. In rough priority for whenever it is picked up again:
    harness on new corpora when convenient.
 3. **Single `;` inline (not own-line) comment alignment** — the own-line case is
    done; inline comments would need the `lex` trivia layer (lispexp-feedback/0002).
-4. **Other dialects' formatters**, **MCP edit JSON op-array** (ADR-0019), and
-   **S-expr structural addresses** (ADR-0018 defers these). Each is its own
-   design-first chunk on a separate surface.
+4. **Racket infix dot** `(a . op . b)` (two dots in one list) — the continuation
+   is off; a niche reader construct, engine-agnostic. (The other cross-cutting
+   gap, byte- vs display-column measurement, is now **fixed** — see the
+   display-width bullet above.)
+5. **Native indenters for the non-bundled dialects** (Clojure/Fennel/Janet/Hy/LFE/
+   …), which currently ride the generic Emacs Lisp fallback. Emacs bundles no
+   oracle for them, so each needs its own reference + spec (a separate,
+   design-first effort per family). Not required for the Emacs-bundled scope.
+6. **MCP edit JSON op-array** (ADR-0019) and **S-expr structural addresses**
+   (ADR-0018 defers these). Each is its own design-first chunk on a separate
+   surface.

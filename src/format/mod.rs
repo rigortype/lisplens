@@ -100,6 +100,7 @@ pub fn has_native_engine(dialect: Dialect) -> bool {
 /// container's open line, which is processed before any line inside it, so their
 /// new indent is known by the time it is needed.
 pub(super) struct Cols<'a> {
+    source: &'a str,
     index: &'a LineIndex,
     old_indent: &'a [usize],
     new_indent: &'a [usize],
@@ -109,12 +110,29 @@ pub(super) struct Cols<'a> {
 }
 
 impl Cols<'_> {
-    /// The output column of `offset`, in displayed columns: Nameless-composed
-    /// prefixes beginning earlier on the line count as their shorter glyph.
+    /// The output column of `offset`, in **displayed** columns — matching Emacs's
+    /// `current-column`. The line content between the end of its original indent
+    /// and `offset` is measured by East Asian Width (`unicode-width`), not by
+    /// UTF-8 byte length, so a wide/multi-byte glyph (`漢` = 2, `λ` = 1, …)
+    /// advances the column as Emacs would rather than by its byte count. New
+    /// indent is added and Nameless-composed prefixes beginning earlier on the
+    /// line count as their shorter glyph.
+    ///
+    /// This measures the content slice with `unicode-width` on every call, even
+    /// for pure-ASCII lines. An ASCII byte-length fast path (per-line, and a
+    /// whole-file `is_ascii` shortcut) was tried and **reverted**: on a 620 KB
+    /// file it saved ~0.1–0.3 ms/format (≈1–3 % of the indent pass, ≪1 % of a
+    /// format), because `unicode-width` already fast-handles ASCII and the indent
+    /// pass is dominated by tree traversal, not width. Not worth the state. See
+    /// `docs/notes/20260704-formatter-width-perf.md`.
     pub(super) fn col(&self, offset: usize) -> usize {
         let (line, column) = self.index.offset_to_line_col(offset as u32);
         let l = line as usize - 1;
-        let raw = (column as usize - 1) - self.old_indent[l] + self.new_indent[l];
+        // The content on this line from the end of its original indent to
+        // `offset`; its display width plus the new indent is the output column.
+        let line_start = offset - (column as usize - 1);
+        let content = &self.source[line_start + self.old_indent[l]..offset];
+        let raw = self.new_indent[l] + display_width(content);
         let saved: usize = self.savings[l]
             .iter()
             .filter(|(o, _)| (*o as usize) < offset)
@@ -126,6 +144,13 @@ impl Cols<'_> {
     pub(super) fn line_of(&self, offset: usize) -> u32 {
         self.index.offset_to_line_col(offset as u32).0
     }
+}
+
+/// The displayed width of `s` in columns, by East Asian Width — Emacs's
+/// `current-column` for the printable glyphs that appear in code (ambiguous-width
+/// characters, like `λ`/`☆`, count as 1, matching Emacs's default).
+fn display_width(s: &str) -> usize {
+    unicode_width::UnicodeWidthStr::width(s)
 }
 
 /// Reindent whole `source` for `dialect`, returning the formatted text. The
@@ -237,11 +262,10 @@ fn format_impl(
         collect_savings(&parsed.data, &index, nl, &mut savings);
     }
 
-    // Original leading-whitespace width of each line (byte columns).
+    // Original leading-whitespace width (byte columns) of each line.
     let old_indent: Vec<usize> = (1..=count as u32)
         .map(|n| {
-            let range = index.line_range(n).unwrap();
-            let content = &source[range];
+            let content = &source[index.line_range(n).unwrap()];
             content.len() - content.trim_start().len()
         })
         .collect();
@@ -290,6 +314,7 @@ fn format_impl(
         } else {
             let indent = {
                 let cols = Cols {
+                    source,
                     index: &index,
                     old_indent: &old_indent,
                     new_indent: &new_indent,
@@ -944,5 +969,35 @@ three))
         let src = "(defun f ()\n  \"a\n    b\")\n";
         // The string's second line must not be reindented.
         assert!(format_elisp(src, &FormatConfig::default()).contains("\n    b\""));
+    }
+
+    /// Alignment is measured in **display** columns (East Asian Width), matching
+    /// Emacs's `current-column`: a continuation aligns under the first argument
+    /// counting each glyph by its width, not its UTF-8 byte length. `λ`/`☆`
+    /// (ambiguous) are width 1, `漢` (wide) / `Ａ` (fullwidth) are width 2 — so the
+    /// two blocks indent differently. Golden captured from Emacs `indent-region`.
+    #[test]
+    fn aligns_multibyte_heads_by_display_width() {
+        let input = "\
+(λλλλ arg1
+arg2)
+(漢漢漢漢 arg1
+arg2)
+(ＡＡＡＡ arg1
+arg2)
+(☆☆☆☆ arg1
+arg2)
+";
+        let expected = "\
+(λλλλ arg1
+      arg2)
+(漢漢漢漢 arg1
+          arg2)
+(ＡＡＡＡ arg1
+          arg2)
+(☆☆☆☆ arg1
+      arg2)
+";
+        assert_eq!(format_elisp(input, &FormatConfig::default()), expected);
     }
 }
