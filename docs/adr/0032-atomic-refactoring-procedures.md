@@ -55,8 +55,13 @@ CLI verbs mirror into MCP tools (ADR-0020). Members, simplest first:
    for *substitutable* bodies — see hygiene below.
 
 3. **`extract` / `fold <pattern> <call>`** — the inverse: find sub-forms matching a
-   structural pattern and replace them with a call (the benchmark's re-inline,
-   generalized). Requires an s-expr pattern language — see below.
+   structural pattern and replace them with a rewrite (the benchmark's re-inline,
+   generalized). Requires an s-expr pattern language — see below. This member
+   generalizes past fold-to-a-call: the same pattern→rewrite engine covers other
+   structural refactors, e.g. **removing a variable guard**
+   (`(when flag (foo))` → `(foo)`), unwrapping a `progn`, or `(if c a nil)` →
+   `(when c a)`. The pattern language is the shared substrate; each such rewrite
+   is a `(pattern, template)` pair over it.
 
 4. **`check`** — standalone parse/validate: report lispexp `ErrorKind`, non-zero
    exit on errors. Cheap; replaces the `emacs -Q --batch check-parens` the baseline
@@ -96,8 +101,9 @@ proposed
   each procedure is one deliberate, safe reach a `sed` one-liner can't match on
   siblings/parens, and the built-in post-condition removes the agent's manual
   re-verify step.
-- Ship order by cost/unblocking: **`check`** and **`rename`** are small and land
-  now; **`inline`** needs the hygiene guardrails; **`extract`** needs the
-  pattern-language design first.
+- Ship order by cost/unblocking: **`check`**, **`rename`**, and **`inline`** have
+  landed (`src/refactor.rs`); **`extract`** needs the pattern-language design
+  first. `inline` ships the restricted-safe subset above (niladic direct
+  substitution, params via `let`, everything unsafe refused with a reason).
 - Re-benchmark the inline round-trip against an `inline`/`extract`-equipped build to
   quantify the step-count drop (iter-4 was a 10-op hand-assembled `line edit`).

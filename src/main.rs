@@ -27,6 +27,7 @@ fn main() -> ExitCode {
         ["format", "--nameless", file] => run_format(PathBuf::from(file), true),
         ["check", file] => run_check(PathBuf::from(file)),
         ["rename", from, to, file] => run_rename(from, to, PathBuf::from(file)),
+        ["inline", name, file] => run_inline(name, PathBuf::from(file)),
         ["mcp"] => match lisplens::mcp::serve() {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {
@@ -206,6 +207,23 @@ fn run_rename(from: &str, to: &str, path: PathBuf) -> ExitCode {
     }
 }
 
+fn run_inline(name: &str, path: PathBuf) -> ExitCode {
+    let dialect = lisplens::dialect_for_path(&path);
+    match lisplens::refactor::inline_definition_in_file(&path, name, dialect) {
+        Ok(outcome) => {
+            println!(
+                "inlined {} call site(s) of `{name}`  {}",
+                outcome.inlined, outcome.new_file_hash
+            );
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("lisplens: {}: {err}", path.display());
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn run_find(name: &str, dir: &str) -> ExitCode {
     match lisplens::search::find_definitions(std::path::Path::new(dir), name) {
         Ok(hits) => {
@@ -243,6 +261,7 @@ fn usage() -> ExitCode {
     eprintln!("  lisplens format [--nameless] <file>  reindent a Lisp file (native, by dialect)");
     eprintln!("  lisplens check <file>         parse-check a Lisp file (diagnostics; non-zero on errors)");
     eprintln!("  lisplens rename <old> <new> <file>   rename a symbol across a file (symbol-exact, safe)");
+    eprintln!("  lisplens inline <name> <file>        inline a function at its call sites (safe subset)");
     eprintln!("  lisplens mcp                  run the MCP server over stdio");
     eprintln!();
     eprintln!("Skeleton stage — see CONTEXT.md and docs/adr/ for the full design.");

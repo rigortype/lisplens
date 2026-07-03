@@ -127,6 +127,12 @@ fn tools() -> Value {
             json!({ "file": file, "from": from, "to": to }),
             &["file", "from", "to"]
         ),
+        tool(
+            "inline",
+            "Inline a function at its call sites (safe subset)",
+            json!({ "file": file, "name": name }),
+            &["file", "name"]
+        ),
     ])
 }
 
@@ -220,6 +226,17 @@ fn run_tool(name: &str, args: &Value) -> Result<String, String> {
             Ok(format!(
                 "renamed {} occurrence(s): {from} -> {to}  {}",
                 outcome.renamed, outcome.new_file_hash
+            ))
+        }
+        "inline" => {
+            let file = arg(args, "file")?;
+            let name = arg(args, "name")?;
+            let dialect = dialect_for_path(Path::new(file));
+            let outcome = crate::refactor::inline_definition_in_file(Path::new(file), name, dialect)
+                .map_err(|e| e.to_string())?;
+            Ok(format!(
+                "inlined {} call site(s): {name}  {}",
+                outcome.inlined, outcome.new_file_hash
             ))
         }
         "find" => {
