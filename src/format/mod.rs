@@ -28,6 +28,7 @@ use lispexp::{parse, Datum, DatumKind, Dialect, LineIndex, Options};
 use crate::config::FormatConfig;
 use crate::nameless::Nameless;
 
+mod clojure;
 mod commonlisp;
 mod scheme;
 
@@ -50,6 +51,7 @@ enum Engine {
     Elisp,
     CommonLisp,
     Scheme,
+    Clojure,
 }
 
 /// The indent engine for `dialect`. `CommonLisp` uses the CL engine; the whole
@@ -67,6 +69,7 @@ fn engine_for(dialect: Dialect) -> Engine {
         | Dialect::Mosh
         | Dialect::Gambit
         | Dialect::SchemeSuperset => Engine::Scheme,
+        Dialect::Clojure => Engine::Clojure,
         _ => Engine::Elisp,
     }
 }
@@ -91,6 +94,7 @@ pub fn has_native_engine(dialect: Dialect) -> bool {
             | Dialect::Mosh
             | Dialect::Gambit
             | Dialect::SchemeSuperset
+            | Dialect::Clojure
     )
 }
 
@@ -329,6 +333,9 @@ fn format_impl(
                             commonlisp::indent(&cols, source, &parsed.data, c, range.start, config)
                         }
                         Engine::Scheme => scheme::indent(&cols, c, range.start, config.body_indent),
+                        Engine::Clojure => {
+                            clojure::indent(&cols, &parsed.data, c, range.start, config.body_indent)
+                        }
                     },
                     None => 0,
                 }
