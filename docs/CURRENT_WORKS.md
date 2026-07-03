@@ -13,9 +13,10 @@ Codebase): `docs/dev/architecture.md`, `docs/dev/formatter.md`, `CONTEXT.md`,
   leaves), whole-tree outermost single-pass collection, and a verbatim template
   substituter, over the splice→reindent→validate pipeline. Verified on the ADR's
   examples from the CLI (guard removal, if→when, progn-unwrap sequence,
-  class-guarded fold, non-linear, deletion, drift, error cases). 127 tests. `extract`
-  renamed → `rewrite`; the true "extract into a new function" is the one unbuilt
-  ADR-0032 member.
+  class-guarded fold, non-linear, deletion, drift, error cases). 127 tests. User
+  guide + a verified rewrite cookbook in **`docs/rewrite.md`** (the "presets are
+  documentation" deliverable). `extract` renamed → `rewrite`; the true "extract
+  into a new function" is the one unbuilt ADR-0032 member.
 - **`rewrite` designed** (ADR-0033, grilled on branch `design/extract-pattern-language`):
   the ADR-0032 `extract` member, resolved via a grilling session into a general
   **structural pattern→template rewrite** ("structural sed" — parse-safe + exact

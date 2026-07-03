@@ -182,6 +182,9 @@ accepted — implemented in `src/refactor.rs` (`rewrite_in_file`), CLI `rewrite`
 - New ubiquitous-language terms (rewrite, pattern, template, metavariable,
   sequence metavariable, metavariable class, structural equality) are recorded in
   `CONTEXT.md`.
+- The user/agent guide + the canonical-rewrite cookbook (guard removal, `progn`
+  unwrap, if→when, safe fold, delete, …) live in **`docs/rewrite.md`** — the "v1
+  presets are documentation" deliverable, in lieu of built-in preset flags.
 - Known deferrals, each a clean future opt-in: `--code-only`, `--repeat[=N]`,
   reader-sugar / number / CL-case folding, trailing-suffix sequence patterns,
   semantic `const` classification, built-in presets, project-wide scope, and the
