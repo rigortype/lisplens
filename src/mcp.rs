@@ -142,14 +142,15 @@ fn tools() -> Value {
         ),
         tool(
             "extract",
-            "Pull the form at `anchor` (or the run of `count` siblings from it) into a new function `name` with `params`. `kind` overrides the defining operator (e.g. defsubst, cl-defun, defn-); the dialect's default (defun/define/defn) is used when omitted",
+            "Pull the form at `anchor` (or the run of `count` siblings from it) into a new function `name` with `params`. `kind` overrides the defining operator (e.g. defsubst, cl-defun, defn-); the dialect's default (defun/define/defn) is used when omitted. With `all` true, every occurrence structurally equal to the selection is replaced by a call to the one new function",
             json!({
                 "file": file,
                 "anchor": json!({ "type": "string", "description": "line:hash[:ordinal] of the form" }),
                 "name": name,
                 "params": json!({ "type": "array", "items": { "type": "string" }, "description": "parameter symbols (default none)" }),
                 "count": json!({ "type": "integer", "minimum": 1, "description": "number of contiguous sibling forms to extract (default 1)" }),
-                "kind": json!({ "type": "string", "description": "defining operator head (default: dialect's defun/define/defn)" })
+                "kind": json!({ "type": "string", "description": "defining operator head (default: dialect's defun/define/defn)" }),
+                "all": json!({ "type": "boolean", "description": "extract every structurally-equal occurrence, not just the anchored one (default false)" })
             }),
             &["file", "anchor", "name"]
         ),
@@ -291,18 +292,19 @@ fn run_tool(name: &str, args: &Value) -> Result<String, String> {
                 .map(|n| n as usize)
                 .unwrap_or(1);
             let kind = args.get("kind").and_then(Value::as_str);
+            let all = args.get("all").and_then(Value::as_bool).unwrap_or(false);
             let dialect = dialect_for_path(Path::new(file));
-            let outcome = crate::refactor::extract_block_into_function(
-                Path::new(file),
-                anchor,
-                name,
-                &params,
-                count,
-                kind,
-                dialect,
-            )
-            .map_err(|e| e.to_string())?;
-            Ok(format!("extracted `{name}`  {}", outcome.new_file_hash))
+            let extract = if all {
+                crate::refactor::extract_multi_site
+            } else {
+                crate::refactor::extract_block_into_function
+            };
+            let outcome = extract(Path::new(file), anchor, name, &params, count, kind, dialect)
+                .map_err(|e| e.to_string())?;
+            Ok(format!(
+                "extracted `{name}` at {} site(s)  {}",
+                outcome.sites, outcome.new_file_hash
+            ))
         }
         "find" => {
             let name = arg(args, "name")?;
