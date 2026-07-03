@@ -1,36 +1,79 @@
-//! Emacs Lisp indentation — a native Rust port of Emacs's `calculate-lisp-indent`
-//! / `lisp-indent-function` (ADR-0011, ADR-0026), the first-release formatter.
+//! Native Lisp indentation — Rust ports of the indenters Emacs bundles
+//! (ADR-0011, ADR-0026). A shared driver (line loop, string/comment rules,
+//! touched-region masking, [`Cols`] column arithmetic, rendering) walks the file
+//! and, per code line, asks a dialect-specific *engine* for the indent column.
 //!
-//! Faithful to the model Emacs uses: each line's indentation is derived from the
-//! innermost containing list and the indent spec of its head symbol. Fidelity is
-//! validated against Emacs itself (the tests use output captured from a real
-//! Emacs buffer). Standard indent specs are bundled (harvested once from Emacs);
-//! file-local `declare`/`put` specs are layered on via lispexp's harvester.
+//! Emacs ships three distinct Lisp indenters; each is one engine here (see
+//! [`Engine`]): `lisp-indent-function` for Emacs Lisp (this module) and
+//! `common-lisp-indent-function` for Common Lisp ([`commonlisp`]). The Emacs
+//! Lisp engine also serves as the generic fallback for dialects without a
+//! dedicated engine yet.
 //!
-//! Scope: Emacs Lisp only, whole-file reindent. Other dialects, touched-region
-//! reindent (ADR-0025), and tabs are future work; output is space-indented, LF.
+//! The Emacs Lisp engine is faithful to the model Emacs uses: each line's
+//! indentation is derived from the innermost containing list and the indent spec
+//! of its head symbol. Fidelity is validated against Emacs itself (the tests use
+//! output captured from a real Emacs buffer). Standard indent specs are bundled
+//! (harvested once from Emacs); file-local `declare`/`put` specs are layered on
+//! via lispexp's harvester.
 //!
-//! Fidelity: byte-exact with Emacs on top-level and common forms (the tests use
-//! Emacs-captured golden output). Known gaps remain on deeply nested specforms
-//! (e.g. a long `if-let` condition) and complex macro/quoted-menu forms; the
-//! formatter is always **safe** — it only rewrites leading whitespace, so it
-//! never changes what a file parses to — and these gaps are closed iteratively
-//! against the Emacs oracle (ADR-0026).
+//! Every engine is always **safe** — it only rewrites leading whitespace, so it
+//! never changes what a file parses to — and fidelity gaps are closed
+//! iteratively against the Emacs oracle (ADR-0026).
 
 use std::ops::Range;
 
 use lispexp::indent::{harvest_indent_specs, IndentSpec, IndentTable};
-use lispexp::{parse, Datum, DatumKind, LineIndex, Options};
+use lispexp::{parse, Datum, DatumKind, Dialect, LineIndex, Options};
 
 use crate::config::FormatConfig;
 use crate::nameless::Nameless;
+
+mod commonlisp;
+
+/// Which native indent engine a dialect uses. Emacs bundles distinct Lisp
+/// indenters; each engine is a Rust port of one:
+///
+/// - [`Engine::Elisp`] — Emacs's `lisp-indent-function` / `calculate-lisp-indent`
+///   (`lisp-mode.el`). Drives Emacs Lisp and, for now, serves as the generic
+///   fallback for every dialect without a dedicated engine yet.
+/// - [`Engine::CommonLisp`] — Emacs's `common-lisp-indent-function`
+///   (`cl-indent.el`), the richer style used for Common Lisp.
+///
+/// The Scheme family (`scheme-indent-function`) is future work; those dialects
+/// fall back to [`Engine::Elisp`] until their engine lands.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Engine {
+    Elisp,
+    CommonLisp,
+}
+
+/// The indent engine for `dialect`. `CommonLisp` uses the CL engine; everything
+/// else (Emacs Lisp plus the not-yet-specialised dialects) uses the Emacs Lisp
+/// engine as the generic fallback.
+fn engine_for(dialect: Dialect) -> Engine {
+    match dialect {
+        Dialect::CommonLisp => Engine::CommonLisp,
+        _ => Engine::Elisp,
+    }
+}
+
+/// Whether `dialect` has a *faithful* native engine (one whose fidelity is
+/// validated against Emacs), as opposed to riding the generic Emacs Lisp
+/// fallback. Only these dialects are auto-formatted on Structural edit — the
+/// generic fallback would risk mis-reflowing a dialect it does not model
+/// (e.g. Clojure), so those files are reindented only on an explicit `format`.
+/// The Scheme family joins this set once its engine lands.
+#[must_use]
+pub fn has_native_engine(dialect: Dialect) -> bool {
+    matches!(dialect, Dialect::EmacsLisp | Dialect::CommonLisp)
+}
 
 /// Column arithmetic that accounts for reindentation already applied to earlier
 /// lines: an element's output column is its offset within its line (stable under
 /// reindent) plus that line's *new* indent. Alignment targets always sit on a
 /// container's open line, which is processed before any line inside it, so their
 /// new indent is known by the time it is needed.
-struct Cols<'a> {
+pub(super) struct Cols<'a> {
     index: &'a LineIndex,
     old_indent: &'a [usize],
     new_indent: &'a [usize],
@@ -42,7 +85,7 @@ struct Cols<'a> {
 impl Cols<'_> {
     /// The output column of `offset`, in displayed columns: Nameless-composed
     /// prefixes beginning earlier on the line count as their shorter glyph.
-    fn col(&self, offset: usize) -> usize {
+    pub(super) fn col(&self, offset: usize) -> usize {
         let (line, column) = self.index.offset_to_line_col(offset as u32);
         let l = line as usize - 1;
         let raw = (column as usize - 1) - self.old_indent[l] + self.new_indent[l];
@@ -54,22 +97,30 @@ impl Cols<'_> {
         raw - saved
     }
 
-    fn line_of(&self, offset: usize) -> u32 {
+    pub(super) fn line_of(&self, offset: usize) -> u32 {
         self.index.offset_to_line_col(offset as u32).0
     }
+}
+
+/// Reindent whole `source` for `dialect`, returning the formatted text. The
+/// engine is chosen by [`engine_for`]; leading whitespace on each line is
+/// recomputed while tokens and line order are untouched, so this never changes
+/// what the file parses to.
+pub fn format(source: &str, config: &FormatConfig, dialect: Dialect) -> String {
+    format_impl(source, config, dialect, None, None)
 }
 
 /// Reindent whole Emacs Lisp `source`, returning the formatted text. Leading
 /// whitespace on each line is recomputed; tokens and line order are untouched,
 /// so this never changes what the file parses to.
 pub fn format_elisp(source: &str, config: &FormatConfig) -> String {
-    format_elisp_impl(source, config, None, None)
+    format_impl(source, config, Dialect::EmacsLisp, None, None)
 }
 
 /// Like [`format_elisp`], but measuring columns as they display under Nameless
 /// (ADR-0030) — used when the caller opts into Nameless emulation for a file.
 pub fn format_elisp_nameless(source: &str, config: &FormatConfig, nameless: &Nameless) -> String {
-    format_elisp_impl(source, config, Some(nameless), None)
+    format_impl(source, config, Dialect::EmacsLisp, Some(nameless), None)
 }
 
 /// Which lines a touched-region reindent rewrites (ADR-0025/0028): the
@@ -84,11 +135,18 @@ pub struct Touched<'a> {
 }
 
 /// Auto-format reindent: reindent the whole top-level form(s) overlapping any of
-/// `ranges`. Used for the touched region of a Structural edit.
-pub fn reindent_range(source: &str, config: &FormatConfig, ranges: &[Range<usize>]) -> String {
+/// `ranges`, using `dialect`'s engine. Used for the touched region of a
+/// Structural edit.
+pub fn reindent_range(
+    source: &str,
+    config: &FormatConfig,
+    dialect: Dialect,
+    ranges: &[Range<usize>],
+) -> String {
     reindent(
         source,
         config,
+        dialect,
         None,
         Touched {
             expand: ranges,
@@ -99,10 +157,16 @@ pub fn reindent_range(source: &str, config: &FormatConfig, ranges: &[Range<usize
 
 /// Block reindent: reindent exactly the lines of `block` (one form, possibly
 /// nested), in full file context — the explicit `format`-by-anchor path.
-pub fn reindent_block(source: &str, config: &FormatConfig, block: Range<usize>) -> String {
+pub fn reindent_block(
+    source: &str,
+    config: &FormatConfig,
+    dialect: Dialect,
+    block: Range<usize>,
+) -> String {
     reindent(
         source,
         config,
+        dialect,
         None,
         Touched {
             expand: &[],
@@ -111,26 +175,32 @@ pub fn reindent_block(source: &str, config: &FormatConfig, block: Range<usize>) 
     )
 }
 
-/// The general touched-region reindent (see [`Touched`]), optionally measuring
-/// columns under Nameless (ADR-0030) so an edit to a Nameless file keeps its
-/// composed-prefix alignment.
+/// The general touched-region reindent (see [`Touched`]) for `dialect`,
+/// optionally measuring columns under Nameless (ADR-0030) so an edit to a
+/// Nameless file keeps its composed-prefix alignment.
 pub fn reindent(
     source: &str,
     config: &FormatConfig,
+    dialect: Dialect,
     nameless: Option<&Nameless>,
     touched: Touched,
 ) -> String {
-    format_elisp_impl(source, config, nameless, Some(touched))
+    format_impl(source, config, dialect, nameless, Some(touched))
 }
 
-fn format_elisp_impl(
+fn format_impl(
     source: &str,
     config: &FormatConfig,
+    dialect: Dialect,
     nameless: Option<&Nameless>,
     touched: Option<Touched>,
 ) -> String {
-    let parsed = parse(source, &Options::emacs_lisp());
-    let mut table = lispexp_emacs::indent::bundled_table(lispexp::Dialect::EmacsLisp);
+    let engine = engine_for(dialect);
+    let parsed = parse(source, &Options::for_dialect(dialect));
+    // The Emacs Lisp engine (also the generic fallback) uses the bundled elisp
+    // indent table plus the file's own harvested `declare`/`put` specs; the
+    // Common Lisp engine carries its own standard table (see [`commonlisp`]).
+    let mut table = lispexp_emacs::indent::bundled_table(Dialect::EmacsLisp);
     table.merge(harvest_indent_specs(source));
     let index = LineIndex::new(source);
     let count = index.line_count();
@@ -200,7 +270,14 @@ fn format_elisp_impl(
                     savings: &savings,
                 };
                 match container_at(&parsed.data, range.start) {
-                    Some(c) => indent_for(&cols, &table, c, range.start, config.body_indent),
+                    Some(c) => match engine {
+                        Engine::Elisp => {
+                            indent_for(&cols, &table, c, range.start, config.body_indent)
+                        }
+                        Engine::CommonLisp => {
+                            commonlisp::indent(&cols, source, &parsed.data, c, range.start, config)
+                        }
+                    },
                     None => 0,
                 }
             };
@@ -289,7 +366,7 @@ fn collect_savings(
 }
 
 /// The deepest enclosing list whose span strictly contains `offset`.
-fn container_at<'a, 't>(data: &'a [Datum<'t>], offset: usize) -> Option<&'a Datum<'t>> {
+pub(super) fn container_at<'a, 't>(data: &'a [Datum<'t>], offset: usize) -> Option<&'a Datum<'t>> {
     for d in data {
         let (start, end) = (d.span.start as usize, d.span.end as usize);
         if start < offset && offset < end {
@@ -361,7 +438,13 @@ fn indent_for(cols: &Cols, table: &IndentTable, c: &Datum, offset: usize, body: 
 
 /// Function-call alignment (`calculate-lisp-indent`'s `normal-indent`). `offset`
 /// is the start of the line being indented.
-fn normal_indent(cols: &Cols, c: &Datum, items: &[Datum], open_col: usize, offset: usize) -> usize {
+pub(super) fn normal_indent(
+    cols: &Cols,
+    c: &Datum,
+    items: &[Datum],
+    open_col: usize,
+    offset: usize,
+) -> usize {
     let Some(first) = items.first() else {
         return open_col + 1;
     };
@@ -442,7 +525,7 @@ fn specform(
 /// keywords, numbers and char literals qualify; strings and lists do not. A
 /// prefixed form (`'x`, `,x`, `` `x ``, `#'x`) defers to what it wraps — so
 /// `,sym` is a call head but `,(list)` and `'(list)` are data.
-fn head_is_symbol_like(d: &Datum) -> bool {
+pub(super) fn head_is_symbol_like(d: &Datum) -> bool {
     match &d.kind {
         DatumKind::Symbol(_)
         | DatumKind::Keyword(_)
@@ -453,7 +536,7 @@ fn head_is_symbol_like(d: &Datum) -> bool {
     }
 }
 
-fn as_symbol<'a>(d: &Datum<'a>) -> Option<&'a str> {
+pub(super) fn as_symbol<'a>(d: &Datum<'a>) -> Option<&'a str> {
     match &d.kind {
         DatumKind::Symbol(s) => Some(s),
         _ => None,
@@ -649,6 +732,7 @@ kw))
         let out = reindent_range(
             source,
             &FormatConfig::default(),
+            Dialect::EmacsLisp,
             std::slice::from_ref(&(second..second + 1)),
         );
         // Second form reindented (body at col 2); first left flat.
@@ -658,6 +742,7 @@ kw))
         let out2 = reindent_range(
             source,
             &FormatConfig::default(),
+            Dialect::EmacsLisp,
             std::slice::from_ref(&(0..1)),
         );
         assert_eq!(out2, "(defun a ()\n  (x))\n(defun b ()\n(y))\n");
@@ -672,11 +757,21 @@ kw))
         let bar = source.find("(bar").unwrap()..source.find("b)").unwrap() + 2;
 
         // Block: only `(bar a / b)` reindented; `(baz c / d)` left flat.
-        let block = reindent_block(source, &FormatConfig::default(), bar.clone());
+        let block = reindent_block(
+            source,
+            &FormatConfig::default(),
+            Dialect::EmacsLisp,
+            bar.clone(),
+        );
         assert_eq!(block, "(progn\n  (bar a\n       b)\n(baz c\nd))\n");
 
         // Range: expands to the whole `progn`, so `baz`/`d` are fixed too.
-        let range = reindent_range(source, &FormatConfig::default(), std::slice::from_ref(&bar));
+        let range = reindent_range(
+            source,
+            &FormatConfig::default(),
+            Dialect::EmacsLisp,
+            std::slice::from_ref(&bar),
+        );
         assert_eq!(range, "(progn\n  (bar a\n       b)\n  (baz c\n       d))\n");
     }
 

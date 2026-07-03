@@ -135,10 +135,7 @@ fn run_struct_edit(path: PathBuf) -> ExitCode {
 }
 
 fn run_format(path: PathBuf, nameless: bool) -> ExitCode {
-    if lisplens::dialect_for_path(&path) != lisplens::Dialect::EmacsLisp {
-        eprintln!("lisplens: format currently supports Emacs Lisp (.el) only");
-        return ExitCode::FAILURE;
-    }
+    let dialect = lisplens::dialect_for_path(&path);
     let source = match std::fs::read_to_string(&path) {
         Ok(source) => source,
         Err(err) => {
@@ -147,8 +144,10 @@ fn run_format(path: PathBuf, nameless: bool) -> ExitCode {
         }
     };
     let config = lisplens::config::resolve(&path, &source);
-    // `--nameless` forces it on; a `nameless-mode` file-/dir-local resolves it too.
-    let formatted = if nameless || config.nameless {
+    // Nameless emulation is Emacs Lisp-only (ADR-0030); `--nameless` forces it
+    // on, a `nameless-mode` file-/dir-local resolves it too. Every other dialect
+    // (Common Lisp, and the generic fallback for the rest) formats by dialect.
+    let formatted = if (nameless || config.nameless) && dialect == lisplens::Dialect::EmacsLisp {
         let file_name = path
             .file_name()
             .and_then(|s| s.to_str())
@@ -156,7 +155,7 @@ fn run_format(path: PathBuf, nameless: bool) -> ExitCode {
         let nl = lisplens::nameless::Nameless::for_file(file_name);
         lisplens::format::format_elisp_nameless(&source, &config, &nl)
     } else {
-        lisplens::format::format_elisp(&source, &config)
+        lisplens::format::format(&source, &config, dialect)
     };
     if formatted != source {
         if let Err(err) = lisplens::write::write_atomically(&path, &formatted) {
@@ -201,7 +200,7 @@ fn usage() -> ExitCode {
     eprintln!("  lisplens struct edit <file>   apply a Structural patch from stdin");
     eprintln!("  lisplens find <name> [dir]    find definitions by name (default dir: .)");
     eprintln!("  lisplens refs <name> [dir]    find symbol occurrences (code/data tagged)");
-    eprintln!("  lisplens format [--nameless] <file>  reindent an Emacs Lisp file (native)");
+    eprintln!("  lisplens format [--nameless] <file>  reindent a Lisp file (native, by dialect)");
     eprintln!("  lisplens mcp                  run the MCP server over stdio");
     eprintln!();
     eprintln!("Skeleton stage — see CONTEXT.md and docs/adr/ for the full design.");

@@ -455,9 +455,10 @@ pub fn apply_struct_patch(
     // Auto-format the touched region (ADR-0025/0028): a content edit reindents
     // its whole enclosing top-level form (`expand`); a `format` op reindents
     // exactly its anchored form (`exact`, ADR-0028 point 3). Everything else stays
-    // byte-identical. Structural + Emacs Lisp only — Line-hash stays literal
-    // (ADR-0027), and Emacs Lisp is the one dialect with a formatter so far.
-    let new_content = if dialect == Dialect::EmacsLisp {
+    // byte-identical. Structural only — Line-hash stays literal (ADR-0027). Gated
+    // to dialects with a faithful native engine (Emacs Lisp, Common Lisp); the
+    // generic fallback is not trusted to auto-reflow a dialect it doesn't model.
+    let new_content = if crate::format::has_native_engine(dialect) {
         let config = crate::config::resolve(path, &spliced);
         let expand: Vec<_> = spans
             .iter()
@@ -478,6 +479,7 @@ pub fn apply_struct_patch(
         crate::format::reindent(
             &spliced,
             &config,
+            dialect,
             nl.as_ref(),
             crate::format::Touched {
                 expand: &expand,

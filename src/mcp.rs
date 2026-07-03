@@ -175,12 +175,10 @@ fn run_tool(name: &str, args: &Value) -> Result<String, String> {
         }
         "format" => {
             let file = arg(args, "file")?;
-            if dialect_for_path(Path::new(file)) != crate::Dialect::EmacsLisp {
-                return Err("format currently supports Emacs Lisp (.el) only".to_string());
-            }
+            let dialect = dialect_for_path(Path::new(file));
             let source = read(file)?;
             let config = crate::config::resolve(Path::new(file), &source);
-            let formatted = crate::format::format_elisp(&source, &config);
+            let formatted = crate::format::format(&source, &config, dialect);
             if formatted != source {
                 crate::write::write_atomically(Path::new(file), &formatted)
                     .map_err(|e| format!("{file}: {e}"))?;

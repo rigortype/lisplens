@@ -6,6 +6,20 @@ Codebase): `docs/dev/architecture.md`, `docs/dev/formatter.md`, `CONTEXT.md`,
 
 ## Now
 
+- **Common Lisp indenter landed** (ADR-0031, 2026-07-04): the formatter is now
+  **one shared driver + a dialect-selected engine**. `src/format.rs` became
+  `src/format/mod.rs` (driver + Emacs Lisp engine) plus `src/format/commonlisp.rs`
+  — a faithful Rust port of `common-lisp-indent-function` (`cl-indent.el`):
+  multi-level backtracking + `path`, the `lisp-indent-259` spec walker, the
+  bundled CL table, `tagbody`/`do`/`defmethod`/lambda-hack/`loop`, package-prefix
+  stripping, and lambda-list keyword alignment. `format(source, config, dialect)`
+  dispatches; `.lisp/.lsp/.cl/.asd` → CL engine, non-bundled dialects
+  (Clojure/Fennel/…) → generic Emacs Lisp fallback. Auto-format-on-edit gated to
+  `has_native_engine` (Emacs Lisp, Common Lisp). Byte-exact vs Emacs `lisp-mode`
+  on `cl-ppcre` + the `gpg`/`gpgme` CL sources (residual diffs are the
+  `lisp-indent-defmethod` flat-harness caveat, trailing newlines, or two
+  documented gaps). **Next: the Scheme-family engine (`scheme-indent-function`),
+  then the remaining dialects.**
 - **Released 0.1.0** (2026-07-03) — on [crates.io](https://crates.io/crates/lisplens)
   (`cargo install lisplens`) and as pre-built binaries on the GitHub Release for
   x86_64/aarch64 Linux + macOS and x86_64 Windows. Tag `vX.Y.Z` → GitHub Actions
@@ -23,8 +37,8 @@ Codebase): `docs/dev/architecture.md`, `docs/dev/formatter.md`, `CONTEXT.md`,
   indent algorithm in `src/format.rs` (+ `nameless.rs`), is the top remaining
   candidate to move into lispexp-emacs; Emacs config resolution is a smaller
   follow-up. Not started — a roadmap item for lispexp-emacs.
-- 97 tests pass, `cargo fmt --check` / `cargo clippy --all-targets` clean; tree
-  clean. 30 ADRs.
+- 101 tests pass, `cargo fmt --check` / `cargo clippy --all-targets` clean; tree
+  clean. 31 ADRs.
 - **Touched-region auto-format on Structural edit (ADR-0025/0028) is wired**:
   `apply_struct_patch` reindents the top-level forms an edit fell within
   (`format::reindent_range` + `edit::splice_tracked`), Emacs Lisp only, others

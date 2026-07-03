@@ -1,13 +1,32 @@
-# Formatter (Emacs Lisp)
+# Formatter
 
 How the native indenter works and how to keep it faithful. Decisions: ADR-0011,
-ADR-0025–0028. Config: ADR-0029.
+ADR-0025–0028, **ADR-0031** (multi-dialect dispatch). Config: ADR-0029.
 
-`format::format_elisp(source, &FormatConfig) -> String` is a Rust port of Emacs's
-`calculate-lisp-indent` / `lisp-indent-function`
-(`~/local/src/emacs/lisp/emacs-lisp/lisp-mode.el`).
+The formatter is **one shared driver + a dialect-selected engine** (ADR-0031).
+`format::format(source, &FormatConfig, dialect) -> String` picks the engine via
+`engine_for`; `reindent*` thread the same `dialect`. `format_elisp*` remain as
+Emacs Lisp shims (Nameless is Emacs Lisp-only, ADR-0030). Emacs bundles three
+distinct Lisp indenters and each is one engine here:
 
-## Model
+| engine | Emacs source | dialects |
+| --- | --- | --- |
+| `Engine::Elisp` | `lisp-mode.el` `lisp-indent-function` | Emacs Lisp + **generic fallback** for the rest |
+| `Engine::CommonLisp` | `cl-indent.el` `common-lisp-indent-function` | Common Lisp |
+| *(Scheme — future)* | `scheme.el` `scheme-indent-function` | Scheme family |
+
+The driver (`src/format/mod.rs`) owns the per-line loop, string/comment rules,
+touched-region masking, `Cols` column arithmetic, and rendering; each engine only
+answers "what column does this code line indent to?". `has_native_engine`
+(Emacs Lisp, Common Lisp) gates auto-format-on-edit — the generic fallback formats
+only on an explicit `format` (ADR-0031).
+
+## Emacs Lisp engine
+
+`format_elisp` is a Rust port of Emacs's `calculate-lisp-indent` /
+`lisp-indent-function` (`~/local/src/emacs/lisp/emacs-lisp/lisp-mode.el`).
+
+### Model
 
 Per line, find the innermost containing list and indent by its head symbol's
 indent spec:
@@ -106,10 +125,63 @@ measures, the width saved by composed prefixes beginning earlier on the line.
 - **`nameless-private-prefix` is not modelled**: it is width-neutral (the extra
   separator char is matched by an extra glyph), affecting only the shown glyph.
 
+## Common Lisp engine (ADR-0031)
+
+`format/commonlisp.rs` is a Rust port of `common-lisp-indent-function`
+(`~/local/src/emacs/lisp/emacs-lisp/cl-indent.el`). It is a *different, richer*
+algorithm than the Emacs Lisp engine — worth understanding before touching it:
+
+- **Multi-level backtracking.** Where `lisp-indent-function` looks only at the
+  innermost containing list, this walks *up* to `MAX_BACKTRACKING` (3) levels
+  (`backward-up-list`), building a `path` (the child index at each level,
+  outermost first — `foo` is `(0 3 1)` in `((a b c (d foo) f) g)`). Backtracking
+  is what reaches `flet` from inside a local-function body. `sexp_column` is fixed
+  at the *innermost* list's column throughout the walk.
+- **A spec language, `lisp-indent-259`.** A symbol's method is an integer, `defun`,
+  a named function, or a list of `nil` / integer / `&lambda` / `&rest` / `&body` /
+  `&whole` / destructuring sublists / function symbols. The walker consumes `path`
+  and `method` together; a destructuring sublist is `(&whole X . submethod)` and is
+  entered by skipping `&whole X` (`cddr`). The standard table is bundled in
+  `method_for` (harvested from `cl-indent.el`'s alist, aliases resolved, `defun`
+  expanded to `(4 &lambda &body)`).
+- **`normal-indent` needs all three `calculate-lisp-indent` cases** — including
+  "align under the previous sibling on its own line," which the Emacs Lisp engine
+  never needed (it computes body alignment explicitly). Common Lisp reaches it via
+  `&body`/`&rest`, so `cl_normal_indent` implements the full computation.
+- **Named methods**: `tagbody`, `do`, `defmethod` (counts qualifiers), the
+  `lambda`/`function` hack; plus the `loop` special-case (simple vs extended) and
+  lambda-list keyword alignment (`&key` continuation at keyword + 2, Emacs's
+  default). **Package prefixes are stripped** as a fallback (`cl:defconstant` →
+  `defconstant`, the "pleblisp" feature). Backquote data (`'(…)`) vs code, and
+  `,`/`,@`/`#(` reader prefixes, follow `cl-indent.el`'s per-level char checks.
+
+Known gaps (close against the oracle): `lisp-indent-backquote-substitution` fine
+cases in deeply backquoted macros, and the `#'function` column-shaving variant of
+the lambda hack.
+
 ## Fidelity harness (the main tool for first release)
 
 Emacs binary: `/Applications/Emacs.app/Contents/MacOS/Emacs`. For each file:
-strip indentation, format with lisplens, diff against Emacs `indent-region`.
+strip indentation, format with lisplens, diff against Emacs `indent-region`. The
+recipe below is the **Emacs Lisp** engine; the **Common Lisp** engine uses the
+same shape with `lisp-mode` and `common-lisp-indent-function`:
+
+```sh
+emacs -Q --batch --eval "(progn (require 'cl-indent) (find-file \"em.lisp\") \
+  (lisp-mode) (setq indent-tabs-mode nil) \
+  (setq lisp-indent-function 'common-lisp-indent-function) \
+  (indent-region (point-min) (point-max)) (write-file \"em.lisp\"))"
+```
+
+**Caveat — `defmethod` under a flat harness.** `lisp-indent-defmethod` counts
+method qualifiers via `beginning-of-defun` + `forward-sexp`, which mis-scans when
+*every* line has been de-indented to column 0 (it treats each `(` at column 0 as a
+defun start). So the harness's Emacs side reports the wrong body column for
+`defmethod` forms on stripped input — where lisplens is in fact right (it matches a
+real Emacs on the properly-structured file). Cross-check `defmethod` diffs against
+the original, or with a fixed-point test on the real file. On `cl-ppcre` + the
+`gpg`/`gpgme` CL sources every residual flat-harness diff is either this caveat, a
+trailing newline, or the two known-gap cases above.
 
 ```sh
 REQ="(progn (require 'cl-lib)(require 'cl-macs)(require 'pcase)(require 'subr-x)(require 'seq)(require 'let-alist)(require 'rx)(require 'map)"
@@ -164,7 +236,9 @@ alignment is still off by a column or two. Close them one at a time with the
 harness. Note the harness's Emacs side can't see a file's own `(declare (indent
 …))` (it doesn't evaluate the file), so a file that indents by its own macros
 will show harness diffs where lisplens is in fact right — cross-check against the
-original. Other dialects are future work.
+original. The **Common Lisp** engine is landed (ADR-0031, see above); the
+**Scheme family** (`scheme-indent-function`) is the next engine, and the
+remaining dialects ride the generic Emacs Lisp fallback until they get one.
 
 ## Touched-region reindent (ADR-0025/0028)
 
