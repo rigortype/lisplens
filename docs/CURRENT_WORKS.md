@@ -12,6 +12,17 @@ Codebase): `docs/dev/architecture.md`, `docs/dev/formatter.md`, `CONTEXT.md`,
   publishes (`.github/workflows/release.yml`); next bump via the
   `lisplens-release-prep` skill. No pinned MSRV (binary tool; deps track recent
   stable Rust).
+- **Consuming `lispexp-emacs` 0.1** (on `lispexp` 0.6): the bundled indent table
+  and the file-local / dir-local **parsers** moved out of lisplens into the
+  companion crate (lispexp ADR-0033, lisplens commit `02a293a`) — table verified
+  byte-identical, −78 net lines, behavior unchanged. **Unreleased**: ship it as
+  0.1.1 (internal-only change) via the release skill when ready.
+- **Delegation boundary reviewed** (`docs/notes/20260704-delegation-boundary-review.md`):
+  the current split (lispexp-emacs = Emacs *data + parsers*) is right but
+  incomplete — the highest-reuse Emacs *behavior*, the `calculate-lisp-indent`
+  indent algorithm in `src/format.rs` (+ `nameless.rs`), is the top remaining
+  candidate to move into lispexp-emacs; Emacs config resolution is a smaller
+  follow-up. Not started — a roadmap item for lispexp-emacs.
 - 97 tests pass, `cargo fmt --check` / `cargo clippy --all-targets` clean; tree
   clean. 30 ADRs.
 - **Touched-region auto-format on Structural edit (ADR-0025/0028) is wired**:
