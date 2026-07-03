@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-07-04
+
+A dependency-only release: the Emacs Lisp data and parsers lisplens used to carry in-tree moved out to the new `lispexp-emacs` companion crate. Output is unchanged.
+
+### Changed
+
+- The Emacs Lisp formatter now sources its bundled indent-spec table, and its file-local (`-*- … -*-` / `Local Variables:`) and `.dir-locals.el` variable parsers, from the `lispexp-emacs` crate instead of carrying them in-tree — lisplens keeps the indent algorithm, Nameless awareness, EditorConfig, and config precedence. Dependencies: `lispexp` 0.5 → 0.6 plus `lispexp-emacs` 0.1; the indent table was verified byte-identical, so indentation is unchanged.
+
 ## [0.1.0] - 2026-07-03
 
 First release. lisplens is a CLI and MCP tool that lets an AI agent read a Lisp file's shape cheaply, get a stable content-hash anchor for any target, and edit by that anchor without resending the whole file — drift-checked, syntax-validated, and written atomically. It is polyglot (the dialect is guessed from the file extension) and built on the [lispexp](https://crates.io/crates/lispexp) reader.
@@ -20,5 +28,6 @@ First release. lisplens is a CLI and MCP tool that lets an AI agent read a Lisp 
 - **MCP server** — `lisplens mcp` exposes the same operations over stdio for MCP clients.
 - Polyglot coverage: Common Lisp, Scheme, Emacs Lisp, Clojure, Racket, Fennel, Janet, Hy, LFE, Phel, and more.
 
-[Unreleased]: https://github.com/rigortype/lisplens/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/rigortype/lisplens/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/rigortype/lisplens/releases/tag/v0.1.1
 [0.1.0]: https://github.com/rigortype/lisplens/releases/tag/v0.1.0
