@@ -13,13 +13,13 @@ distinct Lisp indenters and each is one engine here:
 | --- | --- | --- |
 | `Engine::Elisp` | `lisp-mode.el` `lisp-indent-function` | Emacs Lisp + **generic fallback** for the rest |
 | `Engine::CommonLisp` | `cl-indent.el` `common-lisp-indent-function` | Common Lisp |
-| *(Scheme — future)* | `scheme.el` `scheme-indent-function` | Scheme family |
+| `Engine::Scheme` | `scheme.el` `scheme-indent-function` | Scheme, Guile, Racket, Gauche, Mosh, Gambit, superset |
 
 The driver (`src/format/mod.rs`) owns the per-line loop, string/comment rules,
 touched-region masking, `Cols` column arithmetic, and rendering; each engine only
 answers "what column does this code line indent to?". `has_native_engine`
-(Emacs Lisp, Common Lisp) gates auto-format-on-edit — the generic fallback formats
-only on an explicit `format` (ADR-0031).
+(Emacs Lisp, Common Lisp, and the Scheme family) gates auto-format-on-edit — the
+generic fallback formats only on an explicit `format` (ADR-0031).
 
 ## Emacs Lisp engine
 
@@ -159,6 +159,76 @@ Known gaps (close against the oracle): `lisp-indent-backquote-substitution` fine
 cases in deeply backquoted macros, and the `#'function` column-shaving variant of
 the lambda hack.
 
+## Scheme engine (ADR-0031)
+
+`format/scheme.rs` is a Rust port of `scheme-indent-function` (`scheme.el`), used
+for the whole Scheme family: Scheme, Guile, Racket, Gauche, Mosh, Gambit, and the
+permissive superset (`engine_for`). Emacs's own comment says the function
+"duplicates almost all of `lisp-indent-function`" — so this engine is the *Emacs
+Lisp* algorithm, not the CL one, differing only in:
+
+- **A Scheme spec table** (`method_for`), transcribed from the `(put 'sym
+  'scheme-indent-function …)` block in `scheme.el` (~60 entries: `begin` 0, `case`
+  1, `do` 2, `lambda` 1, `let*`/`letrec` 1, `syntax-rules` `defun`, `when`/`unless`
+  1, `dynamic-wind` 3, `receive` 2, the `call-with-*`/`with-*` I/O forms, SRFI
+  8/11/64/204/227/253 forms, R6RS `library`, R7RS `define-record-type` /
+  `define-library` / `guard`, …). The **MIT-Scheme block** is guarded by
+  `scheme-mit-dialect` (default nil) so it is *not* in default `scheme-mode` and is
+  omitted. Names are matched case-sensitively (Scheme, unlike CL).
+- **`syntax-rules` → `defun`**, plus Emacs's fallback: any symbol head longer than
+  3 chars starting with `def` and lacking an explicit property is indented as a
+  `defun` (`(string-match "\`def" …)`).
+- **`scheme-let-indent`** for `let` / `match-let`: a *named* let (a symbol right
+  after the head, `(let loop ((i 0)) …)`) indents as `lisp-indent-specform 2`,
+  an ordinary `let` as `1`.
+
+`normal-indent` is `scheme.rs`'s own faithful port of the full
+`calculate-lisp-indent` (`scheme_normal`), because `scheme-indent-function`
+returns it directly for the data path, distinguished args past the second, and
+body forms — cases where the Emacs Lisp engine's partial `normal_indent` (which
+that engine only needs for cases 1–2, computing body alignment explicitly) is not
+enough. The unifying rule for a symbol-head call is *skip exactly the first
+element, align under the second* — which covers `(f a\n b)`, `(f\n a\n b)`, and a
+multi-element first line (`'#u8(\n #xff #xff\n 0 0)` aligns under the second byte).
+
+Two shared-helper refinements the Scheme corpus forced, both Emacs-faithful and
+regression-checked against the Elisp/CL golden tests:
+
+- **`head_is_symbol_like` now inspects a char literal's glyph.** Emacs Lisp `?a`
+  is symbol-like (`?` is expression-prefix syntax, so the point lands on the word
+  `a`), but Scheme's `#\a` is **not** (`#` is prefix punctuation), so a
+  char-literal-led list/vector indents as *data* (under its first element). The
+  helper now returns true for `Char` only when the token starts with `?`.
+- **`whitespace-after-open-paren` counts only a space/tab on the paren's own
+  line**, not a trailing newline — so `'#u8(` at end of line then numeric bytes
+  indents as a call (under the second element), not as data.
+
+`#(…)` / `#u8(…)` vectors reach the engine because `container_at` now descends
+into a `HashLiteral`'s inner list; a char-literal head (`#\x0030`) is then data
+and a numeric head (`#xff`) is a call, matching Emacs.
+
+Known gap (a *flat-harness* artifact, not an engine bug — the engine matches a
+real Emacs on the properly-structured file): a non-`def`-prefixed macro whose
+*source* is indented like a definition (e.g. chibi's `%define-syntax`, which some
+Scheme editors treat as a macro via runtime introspection). On fully de-indented
+input Emacs's own `beginning-of-defun`-based reindent can mis-scan and reproduce
+the file's definition-style column, where lisplens correctly gives the
+function-call column `scheme-mode` produces from a clean buffer. Cross-check such
+diffs against the original file or a fixed-point reindent, exactly like the CL
+`defmethod` caveat below.
+
+Two further residual gaps, both narrow and not Scheme-specific:
+
+- **Multi-byte columns.** `Cols::col` measures in *byte* columns (lispexp's
+  `LineIndex` is byte-based), but Emacs aligns by *display* columns, so an
+  alignment target on a line containing a multi-byte glyph (`λ`, non-ASCII) can be
+  off by the glyph's extra bytes — e.g. a `(λ (…)` body one column too deep. This
+  affects every engine equally; closing it means teaching `Cols::col` char/display
+  widths.
+- **Racket infix dots** `(a . op . b)` (two dots in one list) — the continuation
+  of such a form is off; a niche reader construct outside `scheme-mode`'s own
+  model.
+
 ## Fidelity harness (the main tool for first release)
 
 Emacs binary: `/Applications/Emacs.app/Contents/MacOS/Emacs`. For each file:
@@ -199,6 +269,24 @@ diff mine.el em.el
   nil specs for cl-*/pcase/… and the comparison is unfair.
 - Corpora: `../lispexp/tests/corpus/{magit,lem}/…`, and random samples from
   `~/local/src/emacs/lisp/`.
+- The **Scheme** engine uses the same shape with `scheme-mode` (no `$REQ`
+  libraries needed — the Scheme table is bundled in `scheme.rs`, and `.rkt` is
+  routed Racket→Scheme but validated against `scheme-mode`, the only Scheme
+  indenter Emacs bundles):
+
+  ```sh
+  EM=/Applications/Emacs.app/Contents/MacOS/Emacs
+  sed 's/^[[:space:]]*//' SRC.scm > mine.scm; cp mine.scm em.scm
+  cargo run -q -- format mine.scm
+  $EM -Q --batch --eval "(progn (find-file \"em.scm\") (scheme-mode) (setq indent-tabs-mode nil) (indent-region (point-min) (point-max)) (write-file \"em.scm\"))"
+  diff em.scm mine.scm
+  ```
+
+  Corpora: `../lispexp/tests/corpus/{chibi-scheme,gauche}/…` (`.scm`/`.sld`) and
+  `../lispexp/tests/corpus/typed-racket/…` (`.rkt`). On these the overwhelming
+  majority of files are byte-exact; residual diffs are the `%define-syntax`
+  flat-harness artifact above, or corpora indented under non-default settings
+  (cross-check against the original file, per the note below).
 - For a Nameless corpus (`~/repo/emacs/php-mode/lisp`), format with
   `lisplens format --nameless` and enable Nameless on the Emacs side:
   `-l nameless.el … (nameless-mode 1) (font-lock-ensure)` **before**
@@ -236,9 +324,10 @@ alignment is still off by a column or two. Close them one at a time with the
 harness. Note the harness's Emacs side can't see a file's own `(declare (indent
 …))` (it doesn't evaluate the file), so a file that indents by its own macros
 will show harness diffs where lisplens is in fact right — cross-check against the
-original. The **Common Lisp** engine is landed (ADR-0031, see above); the
-**Scheme family** (`scheme-indent-function`) is the next engine, and the
-remaining dialects ride the generic Emacs Lisp fallback until they get one.
+original. The **Common Lisp** and **Scheme-family** engines are both landed
+(ADR-0031, see above); the remaining dialects Emacs has no indenter for (Clojure,
+Fennel, Janet, Hy, LFE, …) ride the generic Emacs Lisp fallback until they get
+one.
 
 ## Touched-region reindent (ADR-0025/0028)
 

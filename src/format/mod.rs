@@ -29,6 +29,7 @@ use crate::config::FormatConfig;
 use crate::nameless::Nameless;
 
 mod commonlisp;
+mod scheme;
 
 /// Which native indent engine a dialect uses. Emacs bundles distinct Lisp
 /// indenters; each engine is a Rust port of one:
@@ -38,21 +39,34 @@ mod commonlisp;
 ///   fallback for every dialect without a dedicated engine yet.
 /// - [`Engine::CommonLisp`] — Emacs's `common-lisp-indent-function`
 ///   (`cl-indent.el`), the richer style used for Common Lisp.
+/// - [`Engine::Scheme`] — Emacs's `scheme-indent-function` (`scheme.el`), the
+///   Scheme family's style — the Emacs Lisp algorithm with a Scheme-specific
+///   spec table and a named `let` method.
 ///
-/// The Scheme family (`scheme-indent-function`) is future work; those dialects
-/// fall back to [`Engine::Elisp`] until their engine lands.
+/// Dialects with no Emacs indenter (Clojure, Fennel, Janet, Hy, LFE, …) still
+/// fall back to [`Engine::Elisp`], the generic engine.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Engine {
     Elisp,
     CommonLisp,
+    Scheme,
 }
 
-/// The indent engine for `dialect`. `CommonLisp` uses the CL engine; everything
-/// else (Emacs Lisp plus the not-yet-specialised dialects) uses the Emacs Lisp
-/// engine as the generic fallback.
+/// The indent engine for `dialect`. `CommonLisp` uses the CL engine; the whole
+/// Scheme family (Scheme, Guile, Racket, Gauche, Mosh, Gambit, and the
+/// permissive superset) uses the Scheme engine; everything else (Emacs Lisp plus
+/// the dialects Emacs has no indenter for) uses the Emacs Lisp engine as the
+/// generic fallback.
 fn engine_for(dialect: Dialect) -> Engine {
     match dialect {
         Dialect::CommonLisp => Engine::CommonLisp,
+        Dialect::Scheme
+        | Dialect::Guile
+        | Dialect::Racket
+        | Dialect::Gauche
+        | Dialect::Mosh
+        | Dialect::Gambit
+        | Dialect::SchemeSuperset => Engine::Scheme,
         _ => Engine::Elisp,
     }
 }
@@ -62,10 +76,22 @@ fn engine_for(dialect: Dialect) -> Engine {
 /// fallback. Only these dialects are auto-formatted on Structural edit — the
 /// generic fallback would risk mis-reflowing a dialect it does not model
 /// (e.g. Clojure), so those files are reindented only on an explicit `format`.
-/// The Scheme family joins this set once its engine lands.
+/// The Scheme family (`scheme-indent-function`) is in this set; the remaining
+/// dialects Emacs has no indenter for still ride the generic fallback.
 #[must_use]
 pub fn has_native_engine(dialect: Dialect) -> bool {
-    matches!(dialect, Dialect::EmacsLisp | Dialect::CommonLisp)
+    matches!(
+        dialect,
+        Dialect::EmacsLisp
+            | Dialect::CommonLisp
+            | Dialect::Scheme
+            | Dialect::Guile
+            | Dialect::Racket
+            | Dialect::Gauche
+            | Dialect::Mosh
+            | Dialect::Gambit
+            | Dialect::SchemeSuperset
+    )
 }
 
 /// Column arithmetic that accounts for reindentation already applied to earlier
@@ -277,6 +303,7 @@ fn format_impl(
                         Engine::CommonLisp => {
                             commonlisp::indent(&cols, source, &parsed.data, c, range.start, config)
                         }
+                        Engine::Scheme => scheme::indent(&cols, c, range.start, config.body_indent),
                     },
                     None => 0,
                 }
@@ -389,6 +416,19 @@ pub(super) fn container_at<'a, 't>(data: &'a [Datum<'t>], offset: usize) -> Opti
                 DatumKind::Prefixed { inner, .. } => {
                     container_at(std::slice::from_ref(inner), offset)
                 }
+                // A `#(…)`/`#u8(…)` reader-macro form wraps a list; its inner
+                // list is a containing sexp (Emacs indents a vector's elements
+                // against its own open paren, as data). Fall back to the inner
+                // list itself when nothing deeper contains `offset`.
+                DatumKind::HashLiteral {
+                    inner: Some(inner), ..
+                } => container_at(std::slice::from_ref(inner), offset).or({
+                    if (inner.span.start as usize) < offset && offset < (inner.span.end as usize) {
+                        Some(inner)
+                    } else {
+                        None
+                    }
+                }),
                 _ => None,
             };
         }
@@ -460,8 +500,14 @@ pub(super) fn normal_indent(
     // head isn't a symbol-like token — a list/string/char or prefixed form, so
     // `lisp-indent-function`'s "car is not a symbol" data path applies — or
     // whitespace sits right after the open paren (`( a b`), which is Emacs's
-    // `whitespace-after-open-paren` case.
-    if !head_is_symbol_like(first) || first.span.start as usize > c.span.start as usize + 1 {
+    // `whitespace-after-open-paren` case. The whitespace test only counts a
+    // *space/tab* on the open-paren's own line: when the first element is on a
+    // later line the char after `(` is a newline, which Emacs does not treat as
+    // `whitespace-after-open-paren` (e.g. `'#u8(` at end of line then numeric
+    // elements align as a call, under the second element).
+    let ws_after_open = first.span.start as usize > c.span.start as usize + 1
+        && cols.line_of(first.span.start as usize) == cols.line_of(c.span.start as usize);
+    if !head_is_symbol_like(first) || ws_after_open {
         return cols.col(first.span.start as usize);
     }
     // A function call whose first argument sits on the open-paren's line →
@@ -484,7 +530,10 @@ pub(super) fn normal_indent(
 }
 
 /// `lisp-indent-specform` for an integer spec `n`. `body` is `lisp-body-indent`.
-fn specform(
+/// Shared with the Scheme engine — `scheme.el`'s `scheme-indent-function` calls
+/// this same `lisp-indent-specform` for its integer and `scheme-let-indent`
+/// specs.
+pub(super) fn specform(
     cols: &Cols,
     items: &[Datum],
     offset: usize,
@@ -507,13 +556,25 @@ fn specform(
             normal
         }
     } else {
-        // A body form. Emacs aligns body forms under the first body form; when
-        // that form began on an earlier line, indent under it, otherwise this
-        // line is the first body form and indents one body step past the open
-        // paren. (`(progn (a)` puts later body under `(a)`, not at open_col+2.)
+        // A body form. Three sub-cases, matching Emacs:
+        // - the first body form began on its *own* line (after the open paren)
+        //   → align under it (`(progn` on its own line puts body under the first
+        //   body form);
+        // - the first body form shares the open paren's line with the head and
+        //   distinguished args → it is not a line-start anchor, so this
+        //   continuation falls to `normal`, which aligns under the second element
+        //   (`(define-record-type name #t #t` with fields on the next line puts
+        //   them under `name`, not under the first `#t`);
+        // - otherwise this line *is* the first body form → one body step past the
+        //   open paren.
+        let open_line = cols.line_of(items[0].span.start as usize);
         match items.get(n + 1) {
             Some(fb) if cols.line_of(fb.span.start as usize) < cols.line_of(offset) => {
-                cols.col(fb.span.start as usize)
+                if cols.line_of(fb.span.start as usize) > open_line {
+                    cols.col(fb.span.start as usize)
+                } else {
+                    normal
+                }
             }
             _ => open_col + body,
         }
@@ -521,16 +582,24 @@ fn specform(
 }
 
 /// Whether a list's head reads as a symbol for indentation (Emacs's
-/// `\\sw\\|\\s_` test on the first character after any reader prefix). Symbols,
-/// keywords, numbers and char literals qualify; strings and lists do not. A
-/// prefixed form (`'x`, `,x`, `` `x ``, `#'x`) defers to what it wraps — so
-/// `,sym` is a call head but `,(list)` and `'(list)` are data.
+/// `\\sw\\|\\s_` test on the first character after any reader prefix, reached via
+/// `backward-prefix-chars`). Symbols, keywords and numbers qualify; strings and
+/// lists do not. A boolean `#t`/`#f` qualifies — Emacs steps back over the `#`
+/// prefix char onto the word `t`/`f`, so `'(#t #f\n #t)` aligns as a call (under
+/// the second element). A char literal qualifies only when its glyph is itself a
+/// word/symbol char: Emacs Lisp's `?a` does (`?` is expression-prefix syntax, so
+/// point lands on the word `a`), but Scheme's `#\a` does **not** (the `#\` char
+/// quote is punctuation, so the data path fires and the vector/list aligns under
+/// its first element). A prefixed form (`'x`, `,x`, `` `x ``, `#'x`) defers to
+/// what it wraps — so `,sym` is a call head but `,(list)` and `'(list)` are data.
 pub(super) fn head_is_symbol_like(d: &Datum) -> bool {
     match &d.kind {
         DatumKind::Symbol(_)
         | DatumKind::Keyword(_)
         | DatumKind::Number(_)
-        | DatumKind::Char(_) => true,
+        | DatumKind::Bool(_) => true,
+        // `?a` (Emacs Lisp) is symbol-like; `#\a` / `\a` (Scheme, Clojure) is not.
+        DatumKind::Char(s) => s.starts_with('?'),
         DatumKind::Prefixed { inner, .. } => head_is_symbol_like(inner),
         _ => false,
     }

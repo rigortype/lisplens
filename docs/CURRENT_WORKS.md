@@ -6,6 +6,30 @@ Codebase): `docs/dev/architecture.md`, `docs/dev/formatter.md`, `CONTEXT.md`,
 
 ## Now
 
+- **Scheme-family indenter landed** (ADR-0031, 2026-07-04): `src/format/scheme.rs`
+  — a faithful Rust port of `scheme-indent-function` (`scheme.el`), the *Emacs
+  Lisp* algorithm with a Scheme spec table, `syntax-rules`/`def…` → defun, and the
+  `scheme-let-indent` named-let method, plus its own full `calculate-lisp-indent`
+  `normal-indent`. `engine_for` routes the whole family (Scheme, Guile, Racket,
+  Gauche, Mosh, Gambit, superset) here; `has_native_engine` now covers it too, so
+  auto-format-on-edit is enabled for Scheme. The bundled table is dumped from a
+  real Emacs (the runtime union of the core + DSSSL + **MIT** `put` blocks —
+  `scheme-mit-dialect` defaults to `t`, a key correction). Validated byte-exact vs
+  Emacs `scheme-mode` on the chibi-scheme / gauche / typed-racket corpora: the
+  overwhelming majority of files match (chibi 601/610 ≈ 99%, gauche 841/881
+  parseable ≈ 95%, racket ≈ 94%). Residual diffs are the `beginning-of-defun`
+  flat-harness artifact — a macro or nested `define` whose *source* is indented
+  as a definition (e.g. chibi's `%define-syntax`, `tree-match`), where lisplens
+  matches a *clean* Emacs buffer but Emacs's own from-scratch reindent of fully
+  de-indented input mis-scans — plus non-UTF-8 / CRLF test-data files and corpora
+  indented under non-default settings. The remaining dialects Emacs bundles no
+  indenter for (Clojure/Fennel/Janet/Hy/LFE/…) still ride the generic Emacs Lisp
+  fallback. 106 tests pass (5 new Scheme goldens, captured from the Emacs oracle).
+  Two shared-helper refinements (both regression-checked against the Elisp/CL
+  goldens): `head_is_symbol_like` now treats a `#\`-char literal as data (Scheme)
+  but a `?`-char as symbol-like (Emacs Lisp); `whitespace-after-open-paren` counts
+  only a same-line space/tab, not a trailing newline; `container_at` descends into
+  `#(…)`/`#u8(…)` vectors.
 - **Common Lisp indenter landed** (ADR-0031, 2026-07-04): the formatter is now
   **one shared driver + a dialect-selected engine**. `src/format.rs` became
   `src/format/mod.rs` (driver + Emacs Lisp engine) plus `src/format/commonlisp.rs`
@@ -37,7 +61,7 @@ Codebase): `docs/dev/architecture.md`, `docs/dev/formatter.md`, `CONTEXT.md`,
   indent algorithm in `src/format.rs` (+ `nameless.rs`), is the top remaining
   candidate to move into lispexp-emacs; Emacs config resolution is a smaller
   follow-up. Not started — a roadmap item for lispexp-emacs.
-- 101 tests pass, `cargo fmt --check` / `cargo clippy --all-targets` clean; tree
+- 106 tests pass, `cargo fmt --check` / `cargo clippy --all-targets` clean; tree
   clean. 31 ADRs.
 - **Touched-region auto-format on Structural edit (ADR-0025/0028) is wired**:
   `apply_struct_patch` reindents the top-level forms an edit fell within

@@ -22,7 +22,7 @@ content-hash **anchor** for any target, and edit by anchor.
 | `patch` | Line-hash + Structural **patch DSL** parse/apply; `Outcome{new_file_hash, warnings}` (ADR-0021) |
 | `search` | `find_definitions` / `find_symbol` (code-vs-data via lispexp `walk`) + text renderers (ADR-0010) |
 | `config` | resolve `indent-tabs-mode`/`tab-width` from file-local/dir-locals/EditorConfig (ADR-0029); file-local + dir-local *parsing* delegated to `lispexp_emacs::{local_vars,dir_locals}` (lispexp ADR-0033), EditorConfig stays in-tree |
-| `format` | native Lisp indenter, dialect-dispatched: shared driver + an `Engine` per bundled Emacs indenter (Emacs Lisp `lisp-indent-function`; Common Lisp `common-lisp-indent-function` in `format/commonlisp.rs`; generic fallback for the rest) — see `formatter.md`; Emacs Lisp bundled table from `lispexp_emacs::indent::bundled_table` (ADR-0011/0025-0028/**0031**; crate split lispexp ADR-0033) |
+| `format` | native Lisp indenter, dialect-dispatched: shared driver + an `Engine` per bundled Emacs indenter (Emacs Lisp `lisp-indent-function`; Common Lisp `common-lisp-indent-function` in `format/commonlisp.rs`; Scheme family `scheme-indent-function` in `format/scheme.rs`; generic fallback for the rest) — see `formatter.md`; Emacs Lisp bundled table from `lispexp_emacs::indent::bundled_table` (ADR-0011/0025-0028/**0031**; crate split lispexp ADR-0033) |
 | `mcp` | minimal stdio JSON-RPC MCP server (ADR-0020) |
 | `lib` | Lens: `outline`/`expand` (+ `_text`), `dialect_for_path`/`recognized_dialect`, `disappeared_definitions`; re-exports `Dialect` |
 | `main` | CLI dispatch |
@@ -58,8 +58,8 @@ insert-before.
 ## Safety pipeline (both modes)
 
 drift (strict file-hash, ADR-0017) → splice → **auto-format the touched region**
-(Structural + dialects with a faithful native engine — Emacs Lisp, Common Lisp;
-`format::has_native_engine`, ADR-0031) → validate-then-write (reject edits that add parse
+(Structural + dialects with a faithful native engine — Emacs Lisp, Common Lisp,
+and the Scheme family; `format::has_native_engine`, ADR-0031) → validate-then-write (reject edits that add parse
 errors, compared by lispexp `ErrorKind` multiset, ADR-0005) → atomic write (temp
 + rename, preserves mode, follows symlinks). Success returns the new file-hash
 (of the *formatted* content) + warnings (disappeared definitions, ADR-0024).
