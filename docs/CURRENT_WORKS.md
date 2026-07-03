@@ -20,7 +20,7 @@ on CI's stable** (`rustup update stable`; currently rustc 1.96.1) or the Format 
 fails on version drift; CI's Docs step is `cargo doc --no-deps` with
 `RUSTDOCFLAGS=-D warnings` (no public doc linking to a private item).
 
-**Quality gate (all green):** 155 tests, `cargo fmt --check`,
+**Quality gate (all green):** 156 tests, `cargo fmt --check`,
 `clippy --all-targets`, `RUSTDOCFLAGS=-D warnings cargo doc --no-deps`; tree clean.
 39 ADRs.
 
@@ -50,6 +50,22 @@ long tail / native indenters for non-bundled dialects (Deferred list below);
 (`docs/notes/20260704-delegation-boundary-review.md`).
 
 ## Now
+
+- **Clojure engine validated on real-world corpora + two fidelity fixes**
+  (follow-up to ADR-0039). Ran the whole reitit + ring + hiccup source (272
+  `.clj/.cljs/.cljc`) through `cljfmt fix` (indentation-only) vs lisplens: **268
+  byte-exact on code-line indentation** (223 fully byte-identical incl. comments);
+  the residual differences were comment-only lines / trailing-internal whitespace
+  (out of scope — `format` rewrites leading whitespace only) plus two real bugs,
+  now fixed: (1) **metadata `^{…}` maps** — the map lives in the `Prefixed` node's
+  `arg`, which the shared `container_at` (and `in_string`) ignored, so a metadata
+  map's continuation keys mis-indented and a docstring *inside* metadata got
+  reindented; both now descend `arg`, aligning keys under the first key and leaving
+  string interiors untouched. The **only** remaining code-indent divergence class is
+  `#_`-discarded multi-line forms (4 files): lispexp drops discarded forms from the
+  tree, so lines inside them indent against the enclosing form — an upstream reader
+  limitation, documented in `docs/lispexp-feedback/0003-discarded-forms-dropped.md`.
+  156 tests (1 metadata regression golden). No new ADR (engine/driver fix).
 
 - **Native Clojure indent engine landed** (ADR-0039) — Clojure no longer rides the
   generic Emacs Lisp fallback; `Engine::Clojure` (`src/format/clojure.rs`) is a

@@ -258,9 +258,20 @@ metadata never consume a slot):
 
 The bundled table `rules_for` is cljfmt's `indents/clojure.clj` (plus the merged
 `compojure.clj`/`fuzzy.clj` defaults), verbatim. `[:block N]` differs from Emacs's
-integer spec: it does **not** double-indent the special args. Fidelity is validated
-against `cljfmt fix` — see the harness section. Known limitation: comment-only line
-indentation is the shared driver's and may differ from cljfmt in edge cases.
+integer spec: it does **not** double-indent the special args. Metadata `^{…} form`
+holds its map in the `Prefixed` node's `arg`, so `container_at` and `in_string`
+descend `arg` too (a shared-driver fix, ADR-0039 follow-up) — the map's keys align
+under the first key and a docstring inside metadata stays untouched.
+
+Fidelity is validated against `cljfmt fix` — see the harness section. On the
+reitit + ring + hiccup corpora (272 files) lisplens is byte-exact with cljfmt on
+**268**; the residual 4 are all **`#_`-discarded multi-line forms** (see below), and
+a handful of files differ only in comment-only-line indentation or trailing/internal
+whitespace (out of scope — `format` rewrites leading whitespace only). Known
+limitations: (1) comment-only line indentation is the shared driver's and may differ
+from cljfmt; (2) lispexp drops `#_`-discarded forms from the tree, so lines *inside*
+a discarded multi-line form indent against the enclosing form rather than the
+discarded one — documented in `docs/lispexp-feedback/0003-discarded-forms-dropped.md`.
 
 ## Fidelity harness (the main tool for first release)
 
