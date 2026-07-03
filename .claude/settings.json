@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import json,sys,subprocess as s; f=json.load(sys.stdin).get('tool_input',{}).get('file_path','') or ''; f.endswith('.rs') and s.run(['cargo','fmt'])\" 2>/dev/null || true",
+            "statusMessage": "cargo fmt"
+          }
+        ]
+      }
+    ]
+  }
+}
