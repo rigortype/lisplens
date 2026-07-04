@@ -26,9 +26,13 @@ lisplens' formatter indents each line by finding its innermost containing collec
 
 On the reitit + ring + hiccup corpora (272 files) this is the **only** remaining class of code-line indentation divergence: 4 files, all `#_`-discard, once the metadata-`arg` descent bugs were fixed on the lisplens side. Everything else is byte-exact vs cljfmt.
 
-## What would resolve it
+## What would resolve it (proposed, non-breaking)
 
-Expose discarded forms structurally rather than dropping them — e.g. a `DatumKind::Discarded { inner }` (or keep them in `items` behind an `is_discarded` flag / a `Prefix::Discard` that survives), so a round-trip consumer can still see the span and shape. A parse option (`keep_discarded: bool`) would avoid changing the default semantics for evaluators.
+Add an opt-in parse option — `Options.keep_discarded: bool`, default `false` — that keeps a discarded form in the tree **as a `DatumKind::Prefixed { prefix: Prefix::Discard, inner }`** instead of dropping it. This reuses the existing prefix machinery the reader already builds for `'`, `` ` ``, `~`, `^`, … (`Discard` is the one prefix currently intercepted and dropped), so it needs **no new `DatumKind` variant** — the enum stays exhaustive — and consumers that descend into `Prefixed` (like lisplens' `container_at`) pick it up unchanged. Nested discards (`#_#_ a b`) then nest as `Prefixed { Discard, Prefixed { Discard, a } }`.
+
+Off by default keeps the current semantics for evaluators / structural queries; a round-trip consumer sets the flag. Since `Options` is `#[non_exhaustive]`, a caller sets it by mutating the field (`opts.keep_discarded = true`), not struct-update. The maintainer implements this upstream; lisplens will then set the flag and consume the published version (per the AGENTS ground rule — lisplens does not PR lispexp).
+
+Downstream note: once discarded forms are in `items`, they occupy a value-index slot — a formatter's arg-index counting must then treat a `Prefix::Discard` node the way the reference formatter (cljfmt) does, so the lisplens consumption should re-validate indexing against cljfmt on `#_`-bearing forms.
 
 ## lisplens's stance
 
