@@ -227,13 +227,27 @@ Deferred until the gate passes: any runtime/CLI surface. The learner is offline 
   (richer) style over `edlis`'s 12-entry approximation. Corpus induction is validated end to
   end (Clojure gate + EISL target).
 
-## Next (Step 3)
+## Step 3 done — ISLisp engine shipped (ADR-0042)
 
-Ship an ISLisp engine as an **induced table on the Emacs-family shape** — special-set +
-body width ≈ 4 + align-under-arg-0 default — seeded from the corpus induction (superset of
-`edlis`'s `special[]`, pruned by a consistency bar and hand-review of the residual heads).
-Record the decision + the induction method in **ADR-0042**, and graduate the learner from
-the scratchpad PoC into repo tooling (an `xtask`/example that regenerates the table). Then
-repeat for Fennel/Janet/Hy/LFE against their own de-facto corpora. Open refinement carried
-from Step 1: the finer offset-per-form (some EISL specials cluster at 2/3, not just 4 — a
-per-head width, or corpus noise, to resolve during the ship).
+Shipped a native ISLisp engine as an **induced table on the shared Clojure engine** —
+special-set → `[:inner 0]` + align-under-arg-0 default + body width 4 — the exact
+Emacs-family shape edlis's `calc_tabs` uses. The special set is edlis's `special[]`
+plus the corpus-attested body forms it omits (`defmethod`/`dolist`/`lambda`/…);
+`if`/`cond`/`for`/`when` stay aligning. Reached via `--dialect islisp` (`.lsp` default
+stays Common Lisp). A golden test locks edlis's model.
+
+**The decisive number:** on EISL-native sources (`library`/`example`/`verify`/`tests`)
+the induced engine matches **75.2%** of code-line indentation vs **54.2%** for the old
+generic Emacs Lisp fallback (+21 pt) — corpus induction produced a materially better
+engine than any off-the-shelf port. `bench/` is an outlier (25%): Gabriel benchmarks
+ported from CL/Scheme carry foreign indentation — the multi-style-corpus caveat, made
+concrete, not an engine gap. A single body width can't be byte-exact on a corpus that
+isn't itself uniform; the engine normalises toward edlis's plurality style.
+
+## Next
+
+- Graduate the learner from the scratchpad PoC into repo tooling (an `xtask`/example
+  that regenerates a dialect's table), so induced tables are reproducible in-tree.
+- Finer per-form body width (some EISL specials cluster at 2/3, not just 4).
+- Apply the method to the other fallback dialects (Fennel/Janet/Hy/LFE) against their
+  own de-facto corpora, validating against any reference each has (fnlfmt, spork/fmt, …).
