@@ -20,7 +20,7 @@ on CI's stable** (`rustup update stable`; currently rustc 1.96.1) or the Format 
 fails on version drift; CI's Docs step is `cargo doc --no-deps` with
 `RUSTDOCFLAGS=-D warnings` (no public doc linking to a private item).
 
-**Quality gate (all green):** 158 tests, `cargo fmt --check`,
+**Quality gate (all green):** 160 tests, `cargo fmt --check`,
 `clippy --all-targets`, `RUSTDOCFLAGS=-D warnings cargo doc --no-deps`; tree clean.
 40 ADRs.
 
@@ -50,6 +50,25 @@ long tail / native indenters for non-bundled dialects (Deferred list below);
 (`docs/notes/20260704-delegation-boundary-review.md`).
 
 ## Now
+
+- **Clojure engine validated on 8 repos + metadata/prefix-head fixes** (follow-up
+  to ADR-0039/0040). Expanded the real-code validation to **eight** repos (hiccup,
+  ring, reitit, clj-kondo, next.jdbc, malli, integrant, jsonista — 663 real
+  `.clj/.cljs/.cljc`, excluding clj-kondo's deliberately-malformed linter fixtures),
+  in **both** semantic and fixed styles vs `cljfmt fix --config`. Found and fixed
+  three real bugs, taking the **semantic** style to **zero non-`#_` code-indent
+  divergences** (all ~20 residuals are the upstream `#_`-discard limitation); the
+  **fixed** style has one residual (an obscure `(#?(…) …)` reader-conditional-headed
+  call, off-by-one). Fixes: (1) an argument is located by its **form** start past any
+  `^metadata` prefix (`form_start`), so a `^Tag` on the head line while its form
+  wraps doesn't make the arg look completed (`(doto ^Tag⏎(f)⏎(g))`); the alignment
+  *column* stays the element's true start (cljfmt aligns under the `^`). (2) a
+  `^meta` **head** is transparent for rule lookup (`(^:m when …)` uses when's rule),
+  but a quote/var-quote/unquote head (`#'foo`, `'foo`) is **not** a symbol head →
+  default alignment (cljfmt keys on the bare symbol token, unlike the Emacs engines'
+  transparent prefixes). Learned the cljfmt `--config`-from-CWD gotcha the hard way
+  (an early fixed-mode run silently used the default semantic config → 192 false
+  divergences). 160 tests (2 regression goldens). No new ADR (engine tuning).
 
 - **Clojure fixed / Tonsky indent style landed** (ADR-0040) — the opt-in
   alternative to the default semantic style (a deliberate rebellion against

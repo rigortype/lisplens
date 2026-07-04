@@ -71,10 +71,12 @@ pub(super) fn indent(
 
     // Round list (or the inner list of `#(…)`): the call model. `pos` is the number
     // of value children that begin before this line; the line's element is
-    // `items[pos]` at arg index `pos - 1` (head is `items[0]`).
+    // `items[pos]` at arg index `pos - 1` (head is `items[0]`). A child is anchored
+    // at its *form* start, past any leading `^metadata` prefix (which may sit on the
+    // head line while the form itself wraps to this one).
     let pos = items
         .iter()
-        .filter(|it| (it.span.start as usize) < offset)
+        .filter(|it| (form_start(it) as usize) < offset)
         .count();
     let arg_index = pos.wrapping_sub(1);
 
@@ -192,16 +194,35 @@ fn block_indent(
     }
 }
 
-/// Default call alignment: align under arg 0 when it sits on the head's line, else
-/// `open + 1` (head alone on its line).
+/// Default call alignment: align under arg 0 when its *form* sits on the head's
+/// line, else `open + 1` (head alone on its line). The head-line test uses each
+/// element's form start (past any `^metadata` prefix, which may sit on the head
+/// line while the form wraps to the next); the alignment column, though, is the
+/// element's true start — cljfmt aligns a continuation under the `^`, not the form.
 fn default_indent(cols: &Cols, items: &[Datum], open_col: usize) -> usize {
-    let head = &items[0];
+    let head_line = cols.line_of(items[0].span.start as usize);
     if let Some(arg0) = items.get(1) {
-        if cols.line_of(arg0.span.start as usize) == cols.line_of(head.span.start as usize) {
+        if cols.line_of(form_start(arg0) as usize) == head_line {
             return cols.col(arg0.span.start as usize);
         }
     }
     open_col + 1
+}
+
+/// The offset where a datum's *form* begins, skipping any leading `^metadata`
+/// prefix(es) — `^Tag form` / `^{…} form` (which may stack, `^:private ^String x`).
+/// Other reader prefixes (`'`, `` ` ``, `~`, …) are the form's own anchor and are
+/// kept. Used to decide which line an argument's *form* is on, so a metadata
+/// annotation on the head line does not make a wrapped argument look completed.
+fn form_start(d: &Datum) -> u32 {
+    match &d.kind {
+        DatumKind::Prefixed {
+            prefix: lispexp::Prefix::Meta,
+            inner,
+            ..
+        } => form_start(inner),
+        _ => d.span.start,
+    }
 }
 
 /// Collection literal: align under the first element, or `open + delimiter-width`
@@ -237,12 +258,21 @@ fn begins_line(cols: &Cols, items: &[Datum], j: usize) -> bool {
 }
 
 /// The head symbol of a round list for rule lookup: namespace-stripped
-/// (`clojure.core/when` → `when`) and seeing through reader prefixes. `None` for a
-/// non-symbol head (which uses the default alignment).
+/// (`clojure.core/when` → `when`), seeing through a `^metadata` prefix only — cljfmt
+/// treats `(^:m foo …)` as a `foo`-headed (symbol) form. `None` for any other
+/// non-symbol head, **including** a quote / var-quote / unquote one (`'foo`,
+/// `#'foo`, `~foo`): cljfmt keys its rules (and the fixed-style `#re ".*"`) on the
+/// bare symbol token, so those take the default alignment, not the symbol-head path.
+/// (This is the one place the Clojure engine diverges from the Emacs engines, whose
+/// `backward-prefix-chars` makes every prefix transparent.)
 fn head_symbol<'a>(d: &Datum<'a>) -> Option<&'a str> {
     match &d.kind {
         DatumKind::Symbol(s) => Some(strip_ns(s)),
-        DatumKind::Prefixed { inner, .. } => head_symbol(inner),
+        DatumKind::Prefixed {
+            prefix: lispexp::Prefix::Meta,
+            inner,
+            ..
+        } => head_symbol(inner),
         _ => None,
     }
 }
@@ -579,6 +609,32 @@ name 1)";
     }
 
     #[test]
+    fn metadata_prefix_on_args_and_heads() {
+        // A metadata-annotated argument whose *form* wraps to the next line is
+        // located by its form, not the `^` — so `(-write x)` is doto's special arg 0
+        // (open+1), `(.close)` its body (+2). A `^meta` head is transparent for rule
+        // lookup (`^:m when` uses when's `:block 1`), but a var-quote head `#'foo` is
+        // not a symbol head (default alignment). Regressions from the real corpora.
+        let input = "\
+(doto ^Foo
+(-write x)
+(.close))
+(^:m when x
+y)
+(#'foo x
+y)";
+        let want = "\
+(doto ^Foo
+ (-write x)
+  (.close))
+(^:m when x
+  y)
+(#'foo x
+       y)";
+        assert_eq!(fmt(input), want, "\n{}", fmt(input));
+    }
+
+    #[test]
     fn already_formatted_is_a_fixed_point() {
         let input = "\
 (defn process [input]
@@ -621,6 +677,24 @@ y)
      y)
 #(foo %
    %2)";
+        assert_eq!(fmt_fixed(input), want, "\n{}", fmt_fixed(input));
+    }
+
+    #[test]
+    fn fixed_prefixed_heads() {
+        // In fixed style a `^meta` head still counts as a symbol head (+2), but a
+        // var-quote head `#'foo` does not — it takes the default alignment (cljfmt
+        // keys `#re ".*"` on the bare symbol token).
+        let input = "\
+(^:m foo x
+y)
+(#'foo x
+y)";
+        let want = "\
+(^:m foo x
+  y)
+(#'foo x
+       y)";
         assert_eq!(fmt_fixed(input), want, "\n{}", fmt_fixed(input));
     }
 }
