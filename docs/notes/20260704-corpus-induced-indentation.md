@@ -192,3 +192,48 @@ Deferred until the gate passes: any runtime/CLI surface. The learner is offline 
   the finer `:block N` vs `:inner D` layer (needs occurrences where a *special* arg wraps
   — the head-line-child histograms hint at N but conflate inner/block), and porting the
   learner from the scratchpad PoC into repo tooling once EISL induction begins.
+
+- **Step 2 done — EISL induced, cross-checked against `edlis`.** First, the ground truth:
+  `edlis`'s `calc_tabs()` (edlis.c) is a strikingly simple **binary** rule — `is_special(head)`
+  → body-indent at a fixed `paren_col + 4`, else `findnext` = **align under arg 0**. The
+  special set is a 12-entry hardcoded list (`special[]`, syn_highlight.c): `defun defmacro
+  defglobal defdynamic defconstant let let* plet case while progn defmodule`. So EISL sits
+  in the **Emacs-family** shape (special-vs-not), *not* cljfmt's graded `:block N/:inner D`
+  table — and notably `if`/`cond`/`for`/`when` are **not** special, i.e. align under arg 0
+  (the distinctive EISL house style). This confirmed the note's open question directly.
+
+  The generalized learner (dialect-parameterized, body-**offset** detected instead of a
+  hardcoded `+2`) on the EISL corpus (184 `.lsp`, 6 623 occurrences):
+  - **Recovered EISL's body width ≈ 4** (offset histogram peaks at 4, then 2, 3) — a
+    dialect parameter distinct from Clojure's 2, and matching `calc_tabs`'s `+4`. This
+    alone is something no off-the-shelf engine gives.
+  - **Recall = 1.0** over the special forms with enough support: `defun` `defmacro` `let`
+    `let*` `case` `while` `defconstant` `defmodule` all recovered as body; `if`/`cond`/`for`/
+    `when` correctly align (e.g. `if` body=32/align=561). `progn` fell just under the 0.60
+    consistency bar (body=12/align=16) → unlearned, not misclassified. `defglobal`/
+    `defdynamic`/`plet` are corpus-sparse → unlearned.
+  - **Precision 0.31 vs `special[]` is misleading — and the interesting result.** The 18
+    "false positives" are almost all genuine body-indenting Lisp forms the authors write as
+    such but `edlis`'s minimal table omits: `defmethod` (body=59/align=4), `dolist` (18/0),
+    `dotimes` (9/0), `flet`, `labels` (48/1), `lambda` (79/0), `defclass`, `defgeneric`,
+    `defpublic` (77/0), `unwind-protect`, `with-open-*`. `edlis` would align these under
+    arg 0; the humans body-indent them. **The corpus is richer than the editor's rule set**,
+    so induction yields a *better* formatter spec than `calc_tabs` — descriptive beats
+    prescriptive, made concrete.
+
+  **Verdict:** the method transfers cleanly to a genuinely oracle-less dialect. It recovers
+  EISL's binary model and its ≈4 body width, gets perfect recall on learnable specials, and
+  its apparent precision miss is the learner *correctly* surfacing the community's real
+  (richer) style over `edlis`'s 12-entry approximation. Corpus induction is validated end to
+  end (Clojure gate + EISL target).
+
+## Next (Step 3)
+
+Ship an ISLisp engine as an **induced table on the Emacs-family shape** — special-set +
+body width ≈ 4 + align-under-arg-0 default — seeded from the corpus induction (superset of
+`edlis`'s `special[]`, pruned by a consistency bar and hand-review of the residual heads).
+Record the decision + the induction method in **ADR-0042**, and graduate the learner from
+the scratchpad PoC into repo tooling (an `xtask`/example that regenerates the table). Then
+repeat for Fennel/Janet/Hy/LFE against their own de-facto corpora. Open refinement carried
+from Step 1: the finer offset-per-form (some EISL specials cluster at 2/3, not just 4 — a
+per-head width, or corpus noise, to resolve during the ship).
