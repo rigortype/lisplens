@@ -74,7 +74,11 @@ pub(super) fn indent(
     // of value children that begin before this line; the line's element is
     // `items[pos]` at arg index `pos - 1` (head is `items[0]`). A child is anchored
     // at its *form* start, past any leading `^metadata` prefix (which may sit on the
-    // head line while the form itself wraps to this one).
+    // head line while the form itself wraps to this one). A `#_`-discarded form is
+    // kept in the tree (`Options.keep_discarded`) and **counts as a value child** —
+    // matching cljfmt, which walks every node: a discard in a body slot makes the
+    // block degrade to default alignment exactly as a real form would, and a line
+    // *inside* a multi-line discard indents against it via `container_at`.
     let pos = items
         .iter()
         .filter(|it| (form_start(it) as usize) < offset)
@@ -696,6 +700,44 @@ y)";
     }
 
     #[test]
+    fn discarded_form_interior_indents_against_the_discard() {
+        // With `keep_discarded` the reader keeps a `#_`-discarded form in the tree
+        // (as `Prefixed { Discard, … }`), so lines *inside* a multi-line discard
+        // indent against the discarded collection, not the enclosing container —
+        // matching cljfmt (which keeps every node). Regression for feedback 0003.
+        let input = "\
+[a
+#_[\"/spec\" {:c d}
+[\"/x\" {:p 1}]]
+b]";
+        let want = "\
+[a
+ #_[\"/spec\" {:c d}
+    [\"/x\" {:p 1}]]
+ b]";
+        assert_eq!(fmt(input), want, "\n{}", fmt(input));
+    }
+
+    #[test]
+    fn discard_in_a_body_slot_counts_like_a_real_form() {
+        // A kept `#_` discard counts as a value child for the call/block model —
+        // cljfmt walks every node. Here `#_lazy` sits in `if`'s (`:block 1`) body
+        // slot on the head line, so the block degrades to default alignment (under
+        // the condition `true`), just as a real form on the head line would. This is
+        // the common real-world shape (a `#_` commenting out a form) — validated
+        // byte-exact vs cljfmt on the malli/reitit corpora. Regression for 0003.
+        let input = "\
+(if true #_lazy
+(a)
+(b))";
+        let want = "\
+(if true #_lazy
+    (a)
+    (b))";
+        assert_eq!(fmt(input), want, "\n{}", fmt(input));
+    }
+
+    #[test]
     fn already_formatted_is_a_fixed_point() {
         let input = "\
 (defn process [input]
@@ -777,6 +819,29 @@ y)
   x
   y)
 (defstruct Point [x y])";
+        assert_eq!(fmt_phel(input), want, "\n{}", fmt_phel(input));
+    }
+
+    #[test]
+    fn phel_reader_constructs_indent_cleanly() {
+        // Phel-specific reader forms fixed upstream in lispexp 0.7 (feedback
+        // 0004/0005/0006): a `|(…)` short anonymous function, PHP fully-qualified
+        // names (`\RuntimeException`, `\Phel\Lang\Symbol/create`), and a symbol with
+        // an interior `;` (`'*_.%;!:+-?`). Each now reads as one structurally-correct
+        // form, so a call's arg count — and thus its body indent — is right. Golden
+        // captured byte-exact from `phel format`.
+        let input = "\
+(defn f [x]
+(map |(inc $) x)
+(php/new \\RuntimeException \"boom\")
+(\\Phel\\Lang\\Symbol/create \"s\")
+(def sym '*_.%;!:+-?))";
+        let want = "\
+(defn f [x]
+  (map |(inc $) x)
+  (php/new \\RuntimeException \"boom\")
+  (\\Phel\\Lang\\Symbol/create \"s\")
+  (def sym '*_.%;!:+-?))";
         assert_eq!(fmt_phel(input), want, "\n{}", fmt_phel(input));
     }
 

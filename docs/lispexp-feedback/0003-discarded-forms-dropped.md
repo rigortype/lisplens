@@ -1,4 +1,6 @@
-# Feedback: `#_`-discarded forms are dropped from the tree, so a formatter can't indent inside them
+# Feedback: `#_`-discarded forms are dropped from the tree, so a formatter can't indent inside them — RESOLVED (lispexp 0.7.0)
+
+**Shipped in lispexp 0.7.0** as the opt-in `Options.keep_discarded` (default `false`), which keeps a discarded form as `DatumKind::Prefixed { prefix: Prefix::Discard, inner }` exactly as proposed below. lisplens's formatter sets it (`src/format/mod.rs`); `container_at` descends the kept node, so lines inside a multi-line discard indent against it. **Downstream re-validation done:** a kept discard *counts* as a value child for the Clojure `:inner`/`:block` model — matching cljfmt, which walks every node (a `#_` in a body slot degrades the block to default alignment just as a real form would). Confirmed byte-exact vs `cljfmt fix` on the reitit/ring/hiccup/malli/integrant corpora (373 files, **zero** code-indent divergences; the six former `#_`-residual files now match). Regression goldens in `src/format/clojure.rs`.
 
 Upstream feedback to [lispexp](https://crates.io/crates/lispexp) from lisplens, a **verbatim / round-trip** consumer (it reindents by structural position and edits by splicing source spans). Severity: **low** (rare, and only affects discarded/dead code), but it is the one remaining source of indentation divergence vs cljfmt on real Clojure corpora, so it is worth a note.
 

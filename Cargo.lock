@@ -61,15 +61,15 @@ checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
 name = "lispexp"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "33e8671d390e3c2872b8860aa0eafe682d2654072ecb782f48482996a3a9afa3"
+checksum = "c45be82f752a221ada54fbd2ba0fc1774ae0f6a6280f0b9b8cf0e0110d14bb3e"
 
 [[package]]
 name = "lispexp-emacs"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "962823ba8de19df431897c42f878187518095d1017c4c7ab75e8a9744a3dda54"
+checksum = "c56b7d478ef730190cea02107bae506bda74ab10af14fa3f02d42993fddb7103"
 dependencies = [
  "lispexp",
 ]

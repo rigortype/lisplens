@@ -1,4 +1,6 @@
-# Feedback: Phel reader splits a symbol at an interior `;` (treats it as a comment)
+# Feedback: Phel reader splits a symbol at an interior `;` (treats it as a comment) — RESOLVED (lispexp 0.7.0)
+
+**Shipped in lispexp 0.7.0** as `Options.line_comment_in_atom`, set for the Phel preset (`Options::phel()`). A `;` inside a token is now a symbol constituent (`foo;bar` is one symbol, `'*_.%;!:+-?` reads whole) while a boundary `;` stays a comment. lisplens consumes it automatically via `Options::for_dialect(Dialect::Phel)`. Confirmed: all 260 phel-lang `.phel` files parse clean (0 errors), and a symbol-with-interior-`;` no longer truncates the following forms. Regression golden in `src/format/clojure.rs`.
 
 Upstream feedback to [lispexp](https://crates.io/crates/lispexp) from lisplens. Severity: **low** (rare — only deliberate symbol edge-case tests — but it cascades a whole form's indentation once it mis-parses). Found while validating lisplens' Phel indenter against `phel format`.
 

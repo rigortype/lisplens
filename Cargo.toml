@@ -13,8 +13,8 @@ categories = ["command-line-utilities", "development-tools"]
 exclude = ["/.github", "/.claude", "/AGENTS.md", "/CLAUDE.md", "/docs/notes", "/docs/lispexp-feedback"]
 
 [dependencies]
-lispexp = "0.6"
-lispexp-emacs = "0.1"
+lispexp = "0.7"
+lispexp-emacs = "0.2"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 tempfile = "3"
 serde_json = "1"

@@ -254,7 +254,13 @@ fn format_impl(
     touched: Option<Touched>,
 ) -> String {
     let engine = engine_for(dialect);
-    let parsed = parse(source, &Options::for_dialect(dialect));
+    // Keep `#_` / `#;` discarded forms in the tree (as `Prefixed { Discard, … }`)
+    // so lines *inside* a multi-line discard indent against the discarded form,
+    // not its enclosing container — the reindenter is a round-trip consumer, and
+    // this matches cljfmt (which keeps every node). `Options` is `#[non_exhaustive]`.
+    let mut opts = Options::for_dialect(dialect);
+    opts.keep_discarded = true;
+    let parsed = parse(source, &opts);
     // The Emacs Lisp engine (also the generic fallback) uses the bundled elisp
     // indent table plus the file's own harvested `declare`/`put` specs; the
     // Common Lisp engine carries its own standard table (see [`commonlisp`]).

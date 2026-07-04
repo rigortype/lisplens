@@ -56,6 +56,12 @@ two niche one-liners (a closing `])` after inline comments in a `defstruct` fiel
 vector, and a `#(…)`-nested off-by-one in a doc example that uses Clojure-style
 `#(…)` rather than Phel's `|(…)`).
 
+**Update (lispexp 0.7.0):** the `;`-inside-a-symbol residual is resolved upstream —
+lispexp 0.7.0 landed the Phel reader fixes (feedback 0004/0005/0006: `;`-in-symbol,
+`|(…)` short-fn, `\Foo\Bar` FQN), and the whole phel-lang corpus now parses clean
+(0 errors) with zero real indentation divergences. The only remaining residual is
+the shared driver's closing-bracket-after-inline-comment case (engine-agnostic).
+
 ## Consequences
 
 - Phel gets a faithful formatter for free by sharing the Clojure engine — the only

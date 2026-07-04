@@ -1,4 +1,6 @@
-# Feedback: Phel's `|(…)` anonymous-function reader macro is not recognized
+# Feedback: Phel's `|(…)` anonymous-function reader macro is not recognized — RESOLVED (lispexp 0.7.0)
+
+**Shipped in lispexp 0.7.0** as `Options.pipe_anon_fn`, set for the Phel preset. `|(…)` now reads as one short-anonymous-function form (the `HashFn` prefix, like Clojure's `#(…)`), so a form's argument count is correct for symbol-accurate passes; `#(…)` keeps working and a bare `|` stays an ordinary symbol constituent. lisplens consumes it via `Options::for_dialect(Dialect::Phel)`; formatting a `(map |(inc $) x)` is byte-exact vs `phel format`. Regression golden in `src/format/clojure.rs`. (Note: newer Phel deprecates `|(…)` in favour of `#(…)`, but both still read.)
 
 Upstream feedback to [lispexp](https://crates.io/crates/lispexp) from lisplens. Severity: **medium** — it does not (currently) break the formatter's indentation, but it mis-structures a *common* Phel form, which is wrong for any **symbol-accurate** operation (rename, refs, extract) that counts a form's arguments. Found while validating lisplens' Phel indenter against `phel format`.
 

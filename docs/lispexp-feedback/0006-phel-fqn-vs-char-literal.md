@@ -1,4 +1,6 @@
-# Feedback: Phel PHP fully-qualified names (`\Foo\Bar`) are mis-read as `\`-char literals
+# Feedback: Phel PHP fully-qualified names (`\Foo\Bar`) are mis-read as `\`-char literals — RESOLVED (lispexp 0.7.0)
+
+**Shipped in lispexp 0.7.0** as `CharSyntax::BackslashFqn`, set for the Phel preset. `\RuntimeException`, `\Phel\Lang\Symbol`, `(php/new \RuntimeException)` now read as single symbols (correct datum kind and child count for multi-segment names); genuine char literals (`\newline`, `\a`) still read. Validated upstream against phel-lang with 648 FQNs correctly structured; lisplens consumes it via `Options::for_dialect(Dialect::Phel)` and formats `(\Phel\Lang\Symbol/create "s")` byte-exact vs `phel format`. Regression golden in `src/format/clojure.rs`.
 
 Upstream feedback to [lispexp](https://crates.io/crates/lispexp) from lisplens. Severity: **medium** — like the `|(…)` gap (0005) it does not (much) break the formatter, but it mis-structures a **very common** Phel form (PHP interop uses `\Foo\Bar` class names everywhere), which is wrong for any symbol-accurate operation. Found while validating lisplens' Phel indenter against `phel format`.
 
