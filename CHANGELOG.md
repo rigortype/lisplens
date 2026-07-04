@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- `--dialect NAME` — force the dialect for a single-file command (kebab-case, e.g. `--dialect islisp`) instead of guessing from the file extension, so an ambiguous extension like `.lsp` (Common Lisp / AutoLISP / ISLisp) can be read as the one you mean. Project-wide `find`/`refs` keep their per-file guess.
+
 ## [0.2.0] - 2026-07-04
 
 The polyglot release. lisplens grows from an Emacs-Lisp-focused tool into a structural editor and formatter for the whole Lisp family, along two lines. First, a set of parse-safe refactoring commands — `check`, `rename`, `inline`, `rewrite`, and `extract` — that do symbol-accurate, drift-checked transformations as single atomic operations and refuse anything that would break the parse. Second, native indent engines for Common Lisp, the Scheme family, Clojure, and Phel, each a faithful port validated byte-exact against that language's own reference formatter (Emacs, `cljfmt`, `phel format`), so `format` is now correct across dialects rather than approximating them through the Emacs Lisp indenter.
