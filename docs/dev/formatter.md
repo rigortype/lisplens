@@ -14,13 +14,19 @@ Emacs indenter; a fourth (Clojure) ports cljfmt:
 | `Engine::Elisp` | `lisp-mode.el` `lisp-indent-function` | Emacs Lisp + **generic fallback** for the rest |
 | `Engine::CommonLisp` | `cl-indent.el` `common-lisp-indent-function` | Common Lisp |
 | `Engine::Scheme` | `scheme.el` `scheme-indent-function` | Scheme, Guile, Racket, Gauche, Mosh, Gambit, superset |
-| `Engine::Clojure` | **cljfmt** `:inner`/`:block` (ADR-0039) | Clojure |
+| `Engine::Clojure` | **cljfmt** `:inner`/`:block` (ADR-0039); **`phel format`** for Phel (ADR-0041) | Clojure, Phel |
 
 The driver (`src/format/mod.rs`) owns the per-line loop, string/comment rules,
 touched-region masking, `Cols` column arithmetic, and rendering; each engine only
 answers "what column does this code line indent to?". `has_native_engine`
-(Emacs Lisp, Common Lisp, the Scheme family, and Clojure) gates auto-format-on-edit
-— the generic fallback formats only on an explicit `format` (ADR-0031).
+(Emacs Lisp, Common Lisp, the Scheme family, Clojure, and Phel) gates
+auto-format-on-edit — the generic fallback formats only on an explicit `format`
+(ADR-0031). `Engine::Clojure` serves both Clojure and **Phel** (a Clojure-inspired
+Lisp compiling to PHP): same `:inner`/`:block` algorithm, a per-dialect rule table
+(`rules_for(name, dialect)`), and one `:block` difference — Phel body-indents a
+block form's *special* args too once the body breaks, cljfmt keeps them aligned.
+Phel's oracle is `phel format` (byte-exact on 307/310 of phel-lang's own files);
+its residuals are documented in `docs/lispexp-feedback/0004` and ADR-0041.
 
 ## Emacs Lisp engine
 

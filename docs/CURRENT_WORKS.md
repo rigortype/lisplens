@@ -20,9 +20,9 @@ on CI's stable** (`rustup update stable`; currently rustc 1.96.1) or the Format 
 fails on version drift; CI's Docs step is `cargo doc --no-deps` with
 `RUSTDOCFLAGS=-D warnings` (no public doc linking to a private item).
 
-**Quality gate (all green):** 160 tests, `cargo fmt --check`,
+**Quality gate (all green):** 161 tests, `cargo fmt --check`,
 `clippy --all-targets`, `RUSTDOCFLAGS=-D warnings cargo doc --no-deps`; tree clean.
-40 ADRs.
+41 ADRs.
 
 **Gotchas.**
 - A committed **PostToolUse hook** (`.claude/settings.json`, force-tracked past the
@@ -50,6 +50,25 @@ long tail / native indenters for non-bundled dialects (Deferred list below);
 (`docs/notes/20260704-delegation-boundary-review.md`).
 
 ## Now
+
+- **Native Phel indent engine landed** (ADR-0041) — Phel (a Clojure-inspired Lisp
+  compiling to PHP) no longer rides the generic Emacs Lisp fallback. `phel format`
+  turns out to be a **PHP port of cljfmt's `:inner`/`:block` model**, so
+  `Dialect::Phel` routes to `Engine::Clojure` with a per-dialect table
+  (`rules_for(name, dialect)` + `phel_rules_for` = Phel's
+  `FormatterFactory::{INNER,BLOCK}_INDENT_SYMBOLS`, phel-lang 0.47 verbatim). Phel is
+  a strict subset (only `[:inner 0]`/`[:block N]`, no nested inner/regex/reader-cond)
+  with **one `:block` difference**: Phel body-indents a block form's *special* args
+  too once the body breaks (`(when-not⏎(test)⏎(body))` → both at +2), where cljfmt
+  keeps the test at +1 — `block_indent` takes the dialect and skips the special-arg
+  default only for non-Phel. Phel joins `has_native_engine` (auto-reindent on edit).
+  Oracle: `phel format` (PHP+Composer+phel installed). Validated **byte-exact
+  307/310** on phel-lang's own `.phel` files; the 3 residuals: a `;`-inside-a-symbol
+  lispexp tokeniser gap (`docs/lispexp-feedback/0004`, upstream) and two niche
+  one-liners (closing `])` after inline comments; a `#(…)` doc-example off-by-one).
+  Phel value-aligns binding vectors (like cljfmt's opt-in alignment) — out of scope
+  for a leading-whitespace formatter. 161 tests (Phel golden). Third oracle
+  (`phel format`) joins Emacs and cljfmt.
 
 - **Clojure engine validated on 8 repos + metadata/prefix-head fixes** (follow-up
   to ADR-0039/0040). Expanded the real-code validation to **eight** repos (hiccup,

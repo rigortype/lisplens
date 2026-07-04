@@ -69,7 +69,9 @@ fn engine_for(dialect: Dialect) -> Engine {
         | Dialect::Mosh
         | Dialect::Gambit
         | Dialect::SchemeSuperset => Engine::Scheme,
-        Dialect::Clojure => Engine::Clojure,
+        // Phel shares the cljfmt `:inner`/`:block` model with Clojure (ADR-0041),
+        // with its own indent table selected inside the engine by dialect.
+        Dialect::Clojure | Dialect::Phel => Engine::Clojure,
         _ => Engine::Elisp,
     }
 }
@@ -95,6 +97,7 @@ pub fn has_native_engine(dialect: Dialect) -> bool {
             | Dialect::Gambit
             | Dialect::SchemeSuperset
             | Dialect::Clojure
+            | Dialect::Phel
     )
 }
 
@@ -340,6 +343,7 @@ fn format_impl(
                             range.start,
                             config.body_indent,
                             config.clojure_fixed_indent,
+                            dialect,
                         ),
                     },
                     None => 0,
