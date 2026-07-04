@@ -146,3 +146,49 @@ the rest default") — never present an induced table as complete when it is not
 
 Deferred until the gate passes: any runtime/CLI surface. The learner is offline tooling
 (it *produces* a bundled table), not a per-format-call cost.
+
+## Progress
+
+- **Step 0 done** — a `--dialect NAME` override lands on single-file commands (PR #13), so
+  EISL `.lsp` reads as ISLisp (`--dialect islisp`). Confirmed content detection cannot
+  route to ISLisp (lispexp registers no signal), so an explicit override is the honest
+  route. Note: 5/185 EISL files use an EISL reader extension (`|>` pipe) that fails to
+  parse under *both* CL and ISLisp — an EISL-specific construct, not a routing issue;
+  exclude them from the corpus (or file lispexp feedback later).
+
+- **Step 1 PASSED — the reverse-validation gate is green.** A learner (PoC in the
+  scratchpad) induced, per head symbol, the binary "body-indents (`open+2`) vs
+  aligns-under-arg 0" from **851 Clojure files** (reitit/ring/hiccup/malli/integrant,
+  26 017 measured multi-line occurrences), then compared to cljfmt's known table
+  (`rules_for`). Method: for each multi-line round list with a symbol head, vote `body`
+  if the first own-line child sits at `open+2`, `align` if at `open+1` (head-alone) or
+  under arg 0's column; aggregate per head at support ≥ 4, consistency ≥ 0.60.
+
+  | | precision | recall | F1 | accuracy |
+  | --- | --- | --- | --- | --- |
+  | naïve | 0.49 | **0.97** | 0.65 | 0.75 |
+  | + `:inner`-inheritance fix | **0.76** | **0.97** | **0.85** | **0.91** |
+
+  **Recall is the clean win (0.97):** of the 62 heads cljfmt body-indents, the learner
+  recovered 60 from the corpus alone. The naïve precision gap was almost entirely one
+  **methodological leak**: method/impl forms nested inside `reify`/`deftype`/`defrecord`/
+  protocol body-indent because of the *ancestor's* `:inner` rule, and the learner
+  mis-attributed that to the method head. Suppressing measurement of forms directly under
+  an `:inner`-family head (a real, general fix) cut false positives 63 → 19 with no recall
+  loss. Two further findings, both showing the *learner* right where the reference is
+  incomplete/loose:
+  - Most residual "false positives" (`time`, `async`, `bench`, `for-all`, `profile`,
+    `quick-bench`, `conform`, project fns) are **genuine project-local body-indenting
+    macros** cljfmt's built-in table doesn't list — so true precision against a complete
+    ground truth is *higher* than 0.76.
+  - The two "false negatives" are `do` (a `:block 0` that legitimately degrades to
+    align-under-arg 0 when its first form stays on the head line — an identifiability
+    nuance the binary can't capture) and `with-meta` (a function that cljfmt's fuzzy
+    `with-*` regex over-matches — the learner's `align` is the correct call).
+
+  **Verdict:** induction recovers the binary body/align table at F1 ≈ 0.85 (understated),
+  cleanly separates rule-bearing heads from function calls, and even surfaces gaps and
+  over-matches in the static reference. The core method is validated. Deferred to Step 2:
+  the finer `:block N` vs `:inner D` layer (needs occurrences where a *special* arg wraps
+  — the head-line-child histograms hint at N but conflate inner/block), and porting the
+  learner from the scratchpad PoC into repo tooling once EISL induction begins.
