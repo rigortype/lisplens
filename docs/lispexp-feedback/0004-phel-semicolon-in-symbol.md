@@ -23,9 +23,13 @@ lispexp reads the first `(is …` as **unterminated** (the `;y z))` is eaten as 
 
 `;`-as-comment does apply at a boundary in Phel (e.g. `headers ; Map with all headers` in `http.phel`), so the rule is specifically: **`;` does not terminate an in-progress symbol token**.
 
-## What would resolve it
+This is what Phel's own lexer does. Its atom pattern (`Compiler/Application/Lexer.php`) is `([^\(\)\[\]\{\},`@ \n\r\t\#]+\#?)` — the exclusion set does **not** contain `;`, so `;` is an atom constituent; a separate, earlier-ordered comment rule (`;[^\n]*`) only wins when a token *starts* with `;`.
 
-In the Phel dialect's tokeniser, let `;` be a symbol constituent when it appears mid-token (no preceding whitespace / delimiter), and only start a comment at a token boundary — matching Phel's own lexer.
+## What would resolve it (proposed)
+
+Add a dialect option — `Options.line_comment_in_atom: bool`, default `false` — meaning the `line_comment` character is an ordinary atom constituent, so it terminates a symbol only at a token boundary. Set it in `Options::phel()` (`Options { line_comment_in_atom: true, ..Options::clojure() }`); every other dialect keeps `;` as a terminator.
+
+The lexer change is one clause in the atom-terminator test: `|| (c == self.opts.line_comment && !self.opts.line_comment_in_atom)`. The comment-at-token-start path is untouched — `next_token` already lexes a leading `;` as a comment before any atom is started — so a `;` only comments when it *begins* a token (`foo ;bar`), while `foo;bar` and `'*_.%;!:+-?` read whole. (`Options` is `#[non_exhaustive]`, so the field is additive/non-breaking.)
 
 ## lisplens's stance
 
