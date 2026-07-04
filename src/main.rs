@@ -3,11 +3,68 @@
 //! One subcommand so far: `outline <file>`. The mode-first command surface and
 //! MCP server described in ADR-0006 are not built yet.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::OnceLock;
+
+/// A `--dialect NAME` override, resolved once from the command line and consulted
+/// by [`resolve_dialect`]. `None` (or unset) means "guess from the file extension".
+static DIALECT_OVERRIDE: OnceLock<Option<lisplens::Dialect>> = OnceLock::new();
+
+/// The dialect for `path`: the `--dialect` override if one was given, else the
+/// extension guess ([`lisplens::dialect_for_path`]). Single-file commands route
+/// through here so `--dialect` can force an ambiguous extension (`.lsp` is Common
+/// Lisp / AutoLISP / ISLisp); project-wide `find`/`refs` keep their per-file guess.
+fn resolve_dialect(path: &Path) -> lisplens::Dialect {
+    DIALECT_OVERRIDE
+        .get()
+        .copied()
+        .flatten()
+        .unwrap_or_else(|| lisplens::dialect_for_path(path))
+}
+
+/// Parse a dialect from its kebab-case name (`islisp`, `common-lisp`, `clojure`, …).
+fn parse_dialect(name: &str) -> Result<lisplens::Dialect, String> {
+    name.parse::<lisplens::Dialect>().map_err(|_| {
+        format!("unknown --dialect `{name}` (try islisp, common-lisp, clojure, scheme, …)")
+    })
+}
+
+/// Strip a global `--dialect NAME` / `--dialect=NAME` flag out of `args` (last one
+/// wins), returning the parsed dialect. Leaves the remaining args for the
+/// subcommand matcher; errors on an unknown or value-less flag.
+fn take_dialect_flag(args: &mut Vec<String>) -> Result<Option<lisplens::Dialect>, String> {
+    let mut result = None;
+    let mut i = 0;
+    while i < args.len() {
+        if let Some(name) = args[i].strip_prefix("--dialect=") {
+            result = Some(parse_dialect(name)?);
+            args.remove(i);
+        } else if args[i] == "--dialect" {
+            let name = args
+                .get(i + 1)
+                .ok_or_else(|| "--dialect needs a value".to_string())?
+                .clone();
+            result = Some(parse_dialect(&name)?);
+            args.remove(i); // the flag
+            args.remove(i); // its value
+        } else {
+            i += 1;
+        }
+    }
+    Ok(result)
+}
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let override_dialect = match take_dialect_flag(&mut args) {
+        Ok(d) => d,
+        Err(msg) => {
+            eprintln!("lisplens: {msg}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let _ = DIALECT_OVERRIDE.set(override_dialect);
     match args
         .iter()
         .map(String::as_str)
@@ -50,7 +107,7 @@ fn run_struct_expand(path: PathBuf, name: &str) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let dialect = lisplens::dialect_for_path(&path);
+    let dialect = resolve_dialect(&path);
     print!("{}", lisplens::expand_text(&source, dialect, name));
     ExitCode::SUCCESS
 }
@@ -78,7 +135,7 @@ fn run_struct_read(path: PathBuf) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let dialect = lisplens::dialect_for_path(&path);
+    let dialect = resolve_dialect(&path);
     print!("{}", lisplens::outline_text(&source, dialect));
     ExitCode::SUCCESS
 }
@@ -121,7 +178,7 @@ fn run_line_edit(path: PathBuf) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let dialect = lisplens::dialect_for_path(&path);
+    let dialect = resolve_dialect(&path);
     report(lisplens::patch::apply_line_patch(&path, &patch, dialect))
 }
 
@@ -136,7 +193,7 @@ fn run_struct_edit(path: PathBuf) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let dialect = lisplens::dialect_for_path(&path);
+    let dialect = resolve_dialect(&path);
     report(lisplens::patch::apply_struct_patch(&path, &patch, dialect))
 }
 
@@ -151,7 +208,7 @@ fn run_format(args: &[&str]) -> ExitCode {
         return ExitCode::FAILURE;
     };
     let path = PathBuf::from(*file);
-    let dialect = lisplens::dialect_for_path(&path);
+    let dialect = resolve_dialect(&path);
     let source = match std::fs::read_to_string(&path) {
         Ok(source) => source,
         Err(err) => {
@@ -193,7 +250,7 @@ fn run_check(path: PathBuf) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let dialect = lisplens::dialect_for_path(&path);
+    let dialect = resolve_dialect(&path);
     let diagnostics = lisplens::check(&source, dialect);
     // Silent success (exit 0); parse diagnostics to stderr + non-zero on errors,
     // so the check composes in CI and agent pipelines (ADR-0032).
@@ -207,7 +264,7 @@ fn run_check(path: PathBuf) -> ExitCode {
 }
 
 fn run_rename(from: &str, to: &str, path: PathBuf) -> ExitCode {
-    let dialect = lisplens::dialect_for_path(&path);
+    let dialect = resolve_dialect(&path);
     match lisplens::refactor::rename_symbol_in_file(&path, from, to, dialect) {
         Ok(outcome) => {
             println!(
@@ -224,7 +281,7 @@ fn run_rename(from: &str, to: &str, path: PathBuf) -> ExitCode {
 }
 
 fn run_inline(name: &str, path: PathBuf) -> ExitCode {
-    let dialect = lisplens::dialect_for_path(&path);
+    let dialect = resolve_dialect(&path);
     match lisplens::refactor::inline_definition_in_file(&path, name, dialect) {
         Ok(outcome) => {
             println!(
@@ -244,7 +301,7 @@ fn run_rewrite(path: PathBuf) -> ExitCode {
     let Some(spec) = read_stdin() else {
         return ExitCode::FAILURE;
     };
-    let dialect = lisplens::dialect_for_path(&path);
+    let dialect = resolve_dialect(&path);
     match lisplens::refactor::rewrite_in_file(&path, &spec, dialect) {
         Ok(outcome) => {
             println!(
@@ -261,7 +318,7 @@ fn run_rewrite(path: PathBuf) -> ExitCode {
 }
 
 fn run_extract(path: PathBuf, anchor: &str, name: &str, args: &[&str]) -> ExitCode {
-    let dialect = lisplens::dialect_for_path(&path);
+    let dialect = resolve_dialect(&path);
     let opts = match parse_extract_opts(args) {
         Ok(opts) => opts,
         Err(msg) => {
@@ -443,6 +500,63 @@ fn usage() -> ExitCode {
     );
     eprintln!("  lisplens mcp                  run the MCP server over stdio");
     eprintln!();
+    eprintln!("  --dialect NAME   force the dialect for a single-file command (kebab-case,");
+    eprintln!("                   e.g. islisp / common-lisp / clojure) instead of guessing");
+    eprintln!("                   from the extension — useful for ambiguous ones like .lsp");
+    eprintln!();
     eprintln!("Skeleton stage — see CONTEXT.md and docs/adr/ for the full design.");
     ExitCode::FAILURE
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dialect_flag_space_form_is_stripped_and_parsed() {
+        let mut args = vec![
+            "format".to_string(),
+            "--dialect".to_string(),
+            "islisp".to_string(),
+            "x.lsp".to_string(),
+        ];
+        assert_eq!(
+            take_dialect_flag(&mut args).unwrap(),
+            Some(lisplens::Dialect::Islisp)
+        );
+        assert_eq!(args, ["format", "x.lsp"]);
+    }
+
+    #[test]
+    fn dialect_flag_equals_form_is_stripped_and_parsed() {
+        let mut args = vec![
+            "check".to_string(),
+            "--dialect=common-lisp".to_string(),
+            "y.lsp".to_string(),
+        ];
+        assert_eq!(
+            take_dialect_flag(&mut args).unwrap(),
+            Some(lisplens::Dialect::CommonLisp)
+        );
+        assert_eq!(args, ["check", "y.lsp"]);
+    }
+
+    #[test]
+    fn no_flag_leaves_args_untouched() {
+        let mut args = vec!["check".to_string(), "z.el".to_string()];
+        assert_eq!(take_dialect_flag(&mut args).unwrap(), None);
+        assert_eq!(args, ["check", "z.el"]);
+    }
+
+    #[test]
+    fn unknown_dialect_is_an_error() {
+        let mut args = vec!["--dialect".to_string(), "klingon".to_string()];
+        assert!(take_dialect_flag(&mut args).is_err());
+    }
+
+    #[test]
+    fn value_less_dialect_flag_is_an_error() {
+        let mut args = vec!["check".to_string(), "--dialect".to_string()];
+        assert!(take_dialect_flag(&mut args).is_err());
+    }
 }
