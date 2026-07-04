@@ -38,3 +38,16 @@ Any one of these would remove the footgun without changing `line_range`'s conven
 3. **At minimum, document** `line_range` prominently as *normalized content* and *non-tiling*, and point verbatim consumers at `offset_to_line_col` + manual slicing.
 
 `line_range` itself is a good default for the common display/hash case; keep it. The ask is only to make the verbatim path discoverable so a byte-oriented API doesn't quietly lose bytes.
+
+## Disposition (2026-07-04, revisited after the lispexp 0.7.0 consumption)
+
+This is the **only** feedback note still open. It stays **low / non-blocking**:
+lisplens is unaffected in practice (it hashes terminator-excluded content deliberately
+and derives verbatim line bytes from raw source spans, per the design decision above),
+and nothing in the Phel work — or the wider Clojure/Emacs/CL/Scheme formatter — touches
+it. It is a *footgun for the next consumer*, not a lisplens need.
+
+Maintainer's call, in rough order of effort: (a) do nothing and leave this note as the
+record; (b) add the one-line doc caveat on `line_range` (option 3 above) — the cheapest
+real fix; (c) add the additive verbatim accessors (option 1). lisplens has no preference
+and will not be blocked either way; it does not consume any new API here.
