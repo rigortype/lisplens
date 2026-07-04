@@ -20,9 +20,9 @@ on CI's stable** (`rustup update stable`; currently rustc 1.96.1) or the Format 
 fails on version drift; CI's Docs step is `cargo doc --no-deps` with
 `RUSTDOCFLAGS=-D warnings` (no public doc linking to a private item).
 
-**Quality gate (all green):** 156 tests, `cargo fmt --check`,
+**Quality gate (all green):** 158 tests, `cargo fmt --check`,
 `clippy --all-targets`, `RUSTDOCFLAGS=-D warnings cargo doc --no-deps`; tree clean.
-39 ADRs.
+40 ADRs.
 
 **Gotchas.**
 - A committed **PostToolUse hook** (`.claude/settings.json`, force-tracked past the
@@ -50,6 +50,24 @@ long tail / native indenters for non-bundled dialects (Deferred list below);
 (`docs/notes/20260704-delegation-boundary-review.md`).
 
 ## Now
+
+- **Clojure fixed / Tonsky indent style landed** (ADR-0040) — the opt-in
+  alternative to the default semantic style (a deliberate rebellion against
+  Emacs-descended indentation: no rule table, no align-under-first-argument). Every
+  **symbol-headed** round list body indents a flat `open + 2` — function calls,
+  `do`, threading `->`/`->>`, `defn`, all of it; collections `[]`/`{}`/`#{}`, reader
+  conditionals `#?(…)`, and non-symbol heads stay identical to semantic (data /
+  default). Selected by `FormatConfig.clojure_fixed_indent`, enabled by
+  `format --tonsky` (CLI) or a `clojure-ts-indent-style: fixed` file-/dir-local
+  (flows into auto-format-on-edit via ADR-0029). Implementation is a few lines —
+  fixed short-circuits only the symbol-headed round-list branch to `open + body`,
+  reusing the whole engine. Oracle: `cljfmt fix --config {:indents {#re ".*"
+  [[:inner 0]]}}`; validated **byte-exact 268/272** on reitit + ring + hiccup (same
+  residual 4 `#_`-discard files as semantic). Harness gotcha learned: cljfmt reads
+  `.cljfmt.edn` from **CWD**, so pass `--config`/`--no-read-clj-config-files` or it
+  silently uses the default semantic config. 158 tests (fixed golden + config
+  resolution). `--tonsky` in `run_format` (now flag-parsed); `clojure::indent` takes
+  a `fixed` flag.
 
 - **Clojure engine validated on real-world corpora + two fidelity fixes**
   (follow-up to ADR-0039). Ran the whole reitit + ring + hiccup source (272

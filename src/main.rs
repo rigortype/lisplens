@@ -23,8 +23,7 @@ fn main() -> ExitCode {
         ["find", name, dir] => run_find(name, dir),
         ["refs", name] => run_refs(name, "."),
         ["refs", name, dir] => run_refs(name, dir),
-        ["format", file] => run_format(PathBuf::from(file), false),
-        ["format", "--nameless", file] => run_format(PathBuf::from(file), true),
+        ["format", args @ ..] => run_format(args),
         ["check", file] => run_check(PathBuf::from(file)),
         ["rename", from, to, file] => run_rename(from, to, PathBuf::from(file)),
         ["inline", name, file] => run_inline(name, PathBuf::from(file)),
@@ -141,7 +140,17 @@ fn run_struct_edit(path: PathBuf) -> ExitCode {
     report(lisplens::patch::apply_struct_patch(&path, &patch, dialect))
 }
 
-fn run_format(path: PathBuf, nameless: bool) -> ExitCode {
+fn run_format(args: &[&str]) -> ExitCode {
+    // `--nameless` (Emacs Lisp, ADR-0030) and `--tonsky` (Clojure fixed style,
+    // ADR-0040) are flags; the remaining argument is the file. Filenames never
+    // begin with `--`.
+    let nameless = args.contains(&"--nameless");
+    let tonsky = args.contains(&"--tonsky");
+    let Some(file) = args.iter().find(|a| !a.starts_with("--")) else {
+        eprintln!("lisplens: format: no file given");
+        return ExitCode::FAILURE;
+    };
+    let path = PathBuf::from(*file);
     let dialect = lisplens::dialect_for_path(&path);
     let source = match std::fs::read_to_string(&path) {
         Ok(source) => source,
@@ -150,7 +159,10 @@ fn run_format(path: PathBuf, nameless: bool) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let config = lisplens::config::resolve(&path, &source);
+    let mut config = lisplens::config::resolve(&path, &source);
+    // `--tonsky` forces the Clojure fixed style on (a `clojure-ts-indent-style:
+    // fixed` file-/dir-local resolves it too).
+    config.clojure_fixed_indent |= tonsky;
     // Nameless emulation is Emacs Lisp-only (ADR-0030); `--nameless` forces it
     // on, a `nameless-mode` file-/dir-local resolves it too. Every other dialect
     // (Common Lisp, and the generic fallback for the rest) formats by dialect.
@@ -413,7 +425,7 @@ fn usage() -> ExitCode {
     eprintln!("  lisplens struct edit <file>   apply a Structural patch from stdin");
     eprintln!("  lisplens find <name> [dir]    find definitions by name (default dir: .)");
     eprintln!("  lisplens refs <name> [dir]    find symbol occurrences (code/data tagged)");
-    eprintln!("  lisplens format [--nameless] <file>  reindent a Lisp file (native, by dialect)");
+    eprintln!("  lisplens format [--nameless] [--tonsky] <file>  reindent a Lisp file (native, by dialect; --tonsky = Clojure fixed style)");
     eprintln!(
         "  lisplens check <file>         parse-check a Lisp file (diagnostics; non-zero on errors)"
     );

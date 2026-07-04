@@ -333,9 +333,14 @@ fn format_impl(
                             commonlisp::indent(&cols, source, &parsed.data, c, range.start, config)
                         }
                         Engine::Scheme => scheme::indent(&cols, c, range.start, config.body_indent),
-                        Engine::Clojure => {
-                            clojure::indent(&cols, &parsed.data, c, range.start, config.body_indent)
-                        }
+                        Engine::Clojure => clojure::indent(
+                            &cols,
+                            &parsed.data,
+                            c,
+                            range.start,
+                            config.body_indent,
+                            config.clojure_fixed_indent,
+                        ),
                     },
                     None => 0,
                 }

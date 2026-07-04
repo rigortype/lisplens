@@ -26,6 +26,11 @@ pub struct FormatConfig {
     /// Enabled by a `nameless-mode` file-/dir-local, or the `--nameless` CLI flag.
     /// The per-file `Nameless` (current name, aliases) is built by the caller.
     pub nameless: bool,
+    /// Clojure only (ADR-0040): use the **fixed / Tonsky** indent style (every
+    /// symbol-headed list body at a flat `+2`) instead of the default semantic
+    /// `:inner`/`:block` style. Enabled by a `clojure-ts-indent-style: fixed`
+    /// file-/dir-local, or the `--tonsky` CLI flag. Ignored by the other engines.
+    pub clojure_fixed_indent: bool,
 }
 
 impl Default for FormatConfig {
@@ -36,6 +41,7 @@ impl Default for FormatConfig {
             body_indent: 2,
             comment_column: 40,
             nameless: false,
+            clojure_fixed_indent: false,
         }
     }
 }
@@ -77,6 +83,12 @@ fn set_var(cfg: &mut FormatConfig, var: &str, val: &str) {
         "nameless-mode" => match val.trim() {
             "t" => cfg.nameless = true,
             "nil" => cfg.nameless = false,
+            _ => {}
+        },
+        // clojure-ts-mode's style selector (ADR-0040): `fixed` = Tonsky style.
+        "clojure-ts-indent-style" => match val.trim().trim_matches('\'') {
+            "fixed" => cfg.clojure_fixed_indent = true,
+            "semantic" => cfg.clojure_fixed_indent = false,
             _ => {}
         },
         _ => {}
@@ -408,6 +420,18 @@ mod tests {
         let mut c = FormatConfig::default();
         apply_file_locals(";;; x -*- nameless-mode: t -*-\n(foo)\n", &mut c);
         assert!(c.nameless);
+    }
+
+    #[test]
+    fn clojure_ts_indent_style_selects_fixed() {
+        let mut c = FormatConfig::default();
+        set_var(&mut c, "clojure-ts-indent-style", "fixed");
+        assert!(c.clojure_fixed_indent);
+        set_var(&mut c, "clojure-ts-indent-style", "semantic");
+        assert!(!c.clojure_fixed_indent);
+        // A quoted symbol value (`'fixed`) is accepted too.
+        set_var(&mut c, "clojure-ts-indent-style", "'fixed");
+        assert!(c.clojure_fixed_indent);
     }
 
     #[test]
