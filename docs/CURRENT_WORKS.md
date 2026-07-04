@@ -4,51 +4,53 @@ Ephemeral snapshot. **Durable knowledge is in the dev docs** (see `AGENTS.md` �
 Codebase): `docs/dev/architecture.md`, `docs/dev/formatter.md`, `CONTEXT.md`,
 `docs/adr/`.
 
-## Handoff — resume here: the Phel branch is unblocked and consumed; merge PR #11
+## Handoff — resume here: 0.2.0 is released; pick from the candidate work below
 
-**Where.** On branch **`design/phel-engine`** (PR #11, open), rebased onto
-`origin/master` — now **three** commits (the Phel indent engine ADR-0041, the
-consolidated `docs/lispexp-feedback/`, and the lispexp 0.7.0 consumption). `master`
-has everything up to the Clojure work + PR #12 (the AGENTS ground rule). The Clojure
-engine (ADR-0039/0040 + fidelity fixes) is **merged to master** via PRs #7/#8/#9/#10;
-Phel (ADR-0041) is PR #11.
+**Where.** On **`master`**, clean, at the release commit
+`7350b32 Bump up version to 0.2.0` (tagged **`v0.2.0`**). PR #11 (Phel engine +
+lispexp 0.7.0 consumption) is **merged** (merge `53fb6f4`); the whole Clojure/Phel
+formatter line (PRs #7–#11, ADR-0039/0040/0041) and the refactoring commands
+(ADR-0032–0038) are on master and shipped in 0.2.0. Nothing is in flight.
 
-**Unblocked — lispexp 0.7.0 + lispexp-emacs 0.2.0 landed and are consumed** (commit
-`2793692`). The four upstream feedback notes the branch was blocked on are all
-**resolved** and marked so in `docs/lispexp-feedback/` (index in its `README.md`):
-- **0003** `#_`/`#;` discarded forms → `Options.keep_discarded`. Formatter parses
-  with it set (`src/format/mod.rs`); a kept discard *counts* as a value child for the
-  Clojure `:inner`/`:block` model — matching cljfmt (a `#_` in a body slot degrades
-  the block to default exactly as a real form would). **Re-validated vs `cljfmt fix`**
-  on reitit/ring/hiccup/malli/integrant (373 files, **zero** code-indent divergences;
-  the six former `#_`-residual files now match). The tempting "skip discards for arg
-  indexing" filter was tried and **reverted** — it broke `malli/core.cljc` (a `#_lazy`
-  in an `if` body); counting matches cljfmt, so *keep it simple: parse-flag only*.
-- **0004/0005/0006** Phel `;`-in-symbol / `|(…)` short-fn / `\Foo\Bar` FQN → the Phel
-  preset knobs (`line_comment_in_atom`, `pipe_anon_fn`, `CharSyntax::BackslashFqn`),
-  auto-applied by `Options::for_dialect(Phel)`. All 260 phel-lang files parse clean;
-  targeted forms byte-exact vs `phel format`.
+**0.2.0 shipped** — see the "Released 0.2.0" bullet under **Now** for the summary.
+crates.io + GitHub Release (5-platform binaries) both live and verified. The
+`[Unreleased]` changelog block had drifted empty, so the 0.2.0 section was
+reconstructed from `git log v0.1.1..HEAD` — **going forward, add a CHANGELOG
+`[Unreleased]` entry as each user-facing change lands** so the next release-prep is a
+seal, not a reconstruction.
 
-**Version-conflict gotcha (cost a beat this session):** `lispexp = "0.7"` alone does
-not build — `lispexp-emacs` pins `lispexp` (`^0.6` → `^0.7`), so both crates must
-move together (bump `lispexp-emacs = "0.2"`), else two lispexp versions coexist and
-`bundled_table`'s `IndentTable`/`Dialect` clash. The maintainer republished
-lispexp-emacs 0.2.0 against 0.7 in the same drop.
+**lispexp is fully consumed and sufficient** (assessment recorded in
+`docs/lispexp-feedback/README.md`): feedback 0003–0006 resolved by lispexp 0.7.0;
+0007 records that inline-comment trivia needs nothing from lispexp (`lex()` already
+exposes it); only 0001 (LineIndex API, low, workaroundable) stays open. Durable
+lessons from the consumption, both now also in memory:
+- **Version lockstep** — bumping `lispexp` requires bumping `lispexp-emacs` together
+  (they pin each other); otherwise two lispexp versions coexist and `bundled_table`'s
+  `IndentTable`/`Dialect` clash. See [[lispexp-emacs-version-lockstep]].
+- **Discards count, don't skip** — a kept `#_` discard *counts* as a value child for
+  the Clojure `:inner`/`:block` model (matches cljfmt). A "skip discards for arg
+  indexing" filter was tried and **reverted** — it broke `malli/core.cljc` (`#_lazy`
+  in an `if` body). Keep it a parse-flag only.
 
-**Next step: merge PR #11.** Consider a light follow-up: re-run the full eight-repo
-Clojure harness (add clj-kondo/next.jdbc/jsonista — only five repos were re-run this
-session) and confirm the fixed/Tonsky style still has only the one documented
-`(#?(…) …)` reader-conditional-headed off-by-one (two files saw it in the five-repo
-run; both that class, not `#_`).
+**Candidate next work (nothing is blocking; pick by interest):**
+- Light formatter follow-up: re-run the full eight-repo Clojure harness (this session
+  re-ran only five — add clj-kondo/next.jdbc/jsonista) and confirm the fixed/Tonsky
+  style still has only the documented `(#?(…) …)` reader-conditional-headed off-by-one.
+- Inline-comment alignment / comment-only-line indentation to match cljfmt/phel — a
+  lisplens-side job consuming `lispexp::lex()` (see feedback 0007). The last
+  cross-cutting formatter limitation.
+- The deferred/candidate items already listed at the bottom of this file (extract
+  opt-ins, non-bundled-dialect native indenters, `calculate-lisp-indent` → lispexp-emacs).
 
 **Process rules learned this session (also in AGENTS + memory):** never edit/commit/PR
 the **lispexp** repo — record in `docs/lispexp-feedback/`. Interactive doc edits may
 commit on **`master`** directly; **never push `master` without explicit permission**;
 topic branches — push/force-push freely.
 
-**Quality gate (all green on #11):** 164 tests, `cargo fmt --check`,
-`clippy --all-targets`, `RUSTDOCFLAGS=-D warnings cargo doc --no-deps`; tree clean.
-41 ADRs. CI runs `cargo fmt --check` on `dtolnay/rust-toolchain@stable` — keep the
+**Quality gate (all green at v0.2.0):** 164 tests, `cargo fmt --check`,
+`clippy --all-targets`, `RUSTDOCFLAGS=-D warnings cargo doc --no-deps`,
+`cargo publish --dry-run`; tree clean. 41 ADRs. CI runs `cargo fmt --check` on
+`dtolnay/rust-toolchain@stable` — keep the
 local toolchain on CI stable (`rustup update stable`) or the Format step drifts.
 
 **Gotchas.**
@@ -373,6 +375,16 @@ free-var **inference**, skeleton auto-discovery for `--also`, multi-*file* extra
   `lisp-indent-defmethod` flat-harness caveat, trailing newlines, or two
   documented gaps). This was the first engine after Emacs Lisp and the template
   for the Scheme engine above.
+- **Released 0.2.0** (2026-07-04) — the **polyglot release**. Everything since 0.1.1
+  (46 commits, PRs #1–#12): the refactoring commands `check`/`rename`/`inline`/
+  `rewrite`/`extract` (ADR-0032–0038) and native indent engines for Common Lisp, the
+  Scheme family, Clojure (semantic + `--tonsky`), and Phel (ADR-0031/0039/0040/0041),
+  each byte-exact vs its oracle (Emacs / `cljfmt` / `phel format`), plus display-width
+  columns and the lispexp 0.7.0 consumption (`#_` discards + Phel reader fixes). Tag
+  `v0.2.0` at commit `7350b32`; crates.io + GitHub Release (5-platform binaries) live
+  and verified. README updated to the current feature/language surface (native-engine
+  vs fallback dialects; Emacs file-local / `.dir-locals.el` / `.editorconfig` config).
+  164 tests, 41 ADRs.
 - **Released 0.1.0** (2026-07-03) — on [crates.io](https://crates.io/crates/lisplens)
   (`cargo install lisplens`) and as pre-built binaries on the GitHub Release for
   x86_64/aarch64 Linux + macOS and x86_64 Windows. Tag `vX.Y.Z` → GitHub Actions
