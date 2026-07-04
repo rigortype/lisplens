@@ -382,7 +382,121 @@ fn push_containers<'a, 't>(
 fn rules_for(name: &str, dialect: Dialect) -> &'static [Rule] {
     match dialect {
         Dialect::Phel => phel_rules_for(name),
+        Dialect::Fennel => fennel_rules_for(name),
+        Dialect::Janet => janet_rules_for(name),
+        Dialect::Hy => hy_rules_for(name),
+        Dialect::Lfe => lfe_rules_for(name),
         _ => clojure_rules_for(name),
+    }
+}
+
+/// `[:inner 0]` — the only rule shape the four "standard Lisp body+2" dialects
+/// below use: a *special* head body-indents all its children at `open + 2`,
+/// everything else aligns under arg 0 (the default). Their body width is 2 (the
+/// shared default), so unlike ISLisp no width override is needed (ADR-0043).
+const I0: &[Rule] = &[Rule::Inner {
+    depth: 0,
+    idx: None,
+}];
+
+/// Fennel's indent table (ADR-0043). Fennel ships `fnlfmt`; its `indentation.fnl`
+/// body-indents a fixed set of special forms and aligns everything else under
+/// arg 0. This is `fnlfmt`'s set, plus a few forms the Fennel corpus attests that
+/// `fnlfmt`'s list omits (`accumulate`/`case`/`case-try`/`match-try`, …).
+fn fennel_rules_for(name: &str) -> &'static [Rule] {
+    match name {
+        "fn" | "lambda" | "λ" | "let" | "when" | "for" | "each" | "while" | "macro" | "match"
+        | "doto" | "with-open" | "collect" | "icollect" | "accumulate" | "faccumulate"
+        | "fcollect" | "case" | "case-try" | "match-try" | "eval-compiler" | "do" | "when-let"
+        | "if-let" | "each-while" => I0,
+        _ => &[],
+    }
+}
+
+/// Janet's indent table (ADR-0043). Janet ships `spork/fmt`, whose
+/// `*default-indent-2-forms*` body-indent at 2; its list is used verbatim, with the
+/// same `def`/`var`/`with-`/`if-`/`when-` prefix fuzzy-match `spork/fmt` applies.
+fn janet_rules_for(name: &str) -> &'static [Rule] {
+    let listed = matches!(
+        name,
+        "fn" | "match"
+            | "with"
+            | "with-dyns"
+            | "var"
+            | "var-"
+            | "varfn"
+            | "varglobal"
+            | "defer"
+            | "edefer"
+            | "loop"
+            | "seq"
+            | "tabseq"
+            | "catseq"
+            | "generate"
+            | "coro"
+            | "for"
+            | "each"
+            | "eachp"
+            | "eachk"
+            | "case"
+            | "cond"
+            | "do"
+            | "if"
+            | "when"
+            | "while"
+            | "let"
+            | "short-fn"
+            | "try"
+            | "unless"
+            | "default"
+            | "forever"
+            | "upscope"
+            | "repeat"
+            | "forv"
+            | "compwhen"
+            | "compif"
+            | "ev/spawn"
+            | "ev/do-thread"
+            | "ev/spawn-thread"
+            | "ev/with-deadline"
+            | "label"
+            | "prompt"
+    );
+    if listed
+        || name.starts_with("def")
+        || name.starts_with("with-")
+        || name.starts_with("if-")
+        || name.starts_with("when-")
+    {
+        I0
+    } else {
+        &[]
+    }
+}
+
+/// Hy's indent table (ADR-0043) — Hy has no canonical formatter, so this is
+/// **induced** from the Hy corpus (its own `.hy` sources and tests): the special
+/// forms whose bodies the corpus indents at `open + 2`, everything else aligning.
+fn hy_rules_for(name: &str) -> &'static [Rule] {
+    match name {
+        "defn" | "defclass" | "defmacro" | "defreader" | "defmain" | "do" | "for" | "if"
+        | "when" | "unless" | "while" | "let" | "cond" | "try" | "with" | "with-decorator"
+        | "except" | "finally" | "else" | "lfor" | "sfor" | "dfor" | "gfor" | "fn" | "lambda" => I0,
+        _ => &[],
+    }
+}
+
+/// LFE's indent table (ADR-0043) — LFE has no canonical formatter (only a style
+/// guide), so this is **induced** from the LFE corpus: LFE's own special forms
+/// (`defun`/`defmodule`/`case`/`receive`/…) body-indent, everything else aligns.
+fn lfe_rules_for(name: &str) -> &'static [Rule] {
+    match name {
+        "defun" | "defun-" | "defmacro" | "defmodule" | "defrecord" | "defsyntax" | "defspec"
+        | "deftest" | "defn" | "defn-" | "defvar" | "case" | "catch" | "if" | "when" | "let"
+        | "let*" | "flet" | "fletrec" | "lambda" | "match-lambda" | "progn" | "receive" | "try"
+        | "maybe" | "after" | "else" | "eval-when-compile" | "extend-module" | "when-let"
+        | "cond" | "do" => I0,
+        _ => &[],
     }
 }
 
@@ -505,6 +619,64 @@ mod tests {
     /// (ADR-0041); the oracle is `phel format`.
     fn fmt_phel(input: &str) -> String {
         crate::format::format(input, &FormatConfig::default(), Dialect::Phel)
+    }
+
+    /// Reindent one of the four "standard Lisp body+2" dialects (ADR-0043): Fennel
+    /// and Janet from their formatters (`fnlfmt`, `spork/fmt`), Hy and LFE induced.
+    fn fmt_d(input: &str, dialect: Dialect) -> String {
+        crate::format::format(input, &FormatConfig::default(), dialect)
+    }
+
+    #[test]
+    fn fennel_janet_hy_lfe_special_forms_body_indent_and_calls_align() {
+        // All four reuse the shared engine with a per-dialect special set → `[:inner 0]`
+        // (body `open + 2`) and align-under-arg-0 for everything else (ADR-0043).
+        // Fennel `fn`/`when`, Janet `defn`/`when`, Hy `defn`/`when`, LFE `defun`/`case`
+        // body-indent; a plain call aligns its continuation under arg 0.
+        let fennel = "\
+(fn f [x]
+  (when x
+    (print x)))
+(foo a
+     b)";
+        assert_eq!(
+            fmt_d(
+                "(fn f [x]\n(when x\n(print x)))\n(foo a\nb)",
+                Dialect::Fennel
+            ),
+            fennel
+        );
+        let janet = "\
+(defn f [x]
+  (when x
+    (print x)))
+(foo a
+     b)";
+        assert_eq!(
+            fmt_d(
+                "(defn f [x]\n(when x\n(print x)))\n(foo a\nb)",
+                Dialect::Janet
+            ),
+            janet
+        );
+        let hy = janet; // same shape (defn/when body+2, call aligns)
+        assert_eq!(
+            fmt_d("(defn f [x]\n(when x\n(print x)))\n(foo a\nb)", Dialect::Hy),
+            hy
+        );
+        let lfe = "\
+(defun f (x)
+  (case x
+    (1 'one)))
+(foo a
+     b)";
+        assert_eq!(
+            fmt_d(
+                "(defun f (x)\n(case x\n(1 'one)))\n(foo a\nb)",
+                Dialect::Lfe
+            ),
+            lfe
+        );
     }
 
     #[test]

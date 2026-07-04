@@ -69,9 +69,16 @@ fn engine_for(dialect: Dialect) -> Engine {
         | Dialect::Mosh
         | Dialect::Gambit
         | Dialect::SchemeSuperset => Engine::Scheme,
-        // Phel shares the cljfmt `:inner`/`:block` model with Clojure (ADR-0041),
-        // with its own indent table selected inside the engine by dialect.
-        Dialect::Clojure | Dialect::Phel => Engine::Clojure,
+        // Phel shares the cljfmt `:inner`/`:block` model with Clojure (ADR-0041);
+        // Fennel/Janet/Hy/LFE are "standard Lisp body+2" dialects reusing the same
+        // engine with a per-dialect special-form table (ADR-0043) — Fennel/Janet from
+        // their formatters (`fnlfmt`, `spork/fmt`), Hy/LFE induced from their corpora.
+        Dialect::Clojure
+        | Dialect::Phel
+        | Dialect::Fennel
+        | Dialect::Janet
+        | Dialect::Hy
+        | Dialect::Lfe => Engine::Clojure,
         _ => Engine::Elisp,
     }
 }
@@ -98,6 +105,10 @@ pub fn has_native_engine(dialect: Dialect) -> bool {
             | Dialect::SchemeSuperset
             | Dialect::Clojure
             | Dialect::Phel
+            | Dialect::Fennel
+            | Dialect::Janet
+            | Dialect::Hy
+            | Dialect::Lfe
     )
 }
 
