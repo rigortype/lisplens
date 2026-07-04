@@ -1,6 +1,6 @@
 [package]
 name = "lisplens"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 license = "MPL-2.0"
 description = "Token-efficient, polyglot Lisp editing for AI agents (CLI/MCP), built on lispexp"
