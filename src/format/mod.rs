@@ -69,7 +69,9 @@ fn engine_for(dialect: Dialect) -> Engine {
         | Dialect::Mosh
         | Dialect::Gambit
         | Dialect::SchemeSuperset => Engine::Scheme,
-        Dialect::Clojure => Engine::Clojure,
+        // Phel shares the cljfmt `:inner`/`:block` model with Clojure (ADR-0041),
+        // with its own indent table selected inside the engine by dialect.
+        Dialect::Clojure | Dialect::Phel => Engine::Clojure,
         _ => Engine::Elisp,
     }
 }
@@ -95,6 +97,7 @@ pub fn has_native_engine(dialect: Dialect) -> bool {
             | Dialect::Gambit
             | Dialect::SchemeSuperset
             | Dialect::Clojure
+            | Dialect::Phel
     )
 }
 
@@ -251,7 +254,13 @@ fn format_impl(
     touched: Option<Touched>,
 ) -> String {
     let engine = engine_for(dialect);
-    let parsed = parse(source, &Options::for_dialect(dialect));
+    // Keep `#_` / `#;` discarded forms in the tree (as `Prefixed { Discard, … }`)
+    // so lines *inside* a multi-line discard indent against the discarded form,
+    // not its enclosing container — the reindenter is a round-trip consumer, and
+    // this matches cljfmt (which keeps every node). `Options` is `#[non_exhaustive]`.
+    let mut opts = Options::for_dialect(dialect);
+    opts.keep_discarded = true;
+    let parsed = parse(source, &opts);
     // The Emacs Lisp engine (also the generic fallback) uses the bundled elisp
     // indent table plus the file's own harvested `declare`/`put` specs; the
     // Common Lisp engine carries its own standard table (see [`commonlisp`]).
@@ -340,6 +349,7 @@ fn format_impl(
                             range.start,
                             config.body_indent,
                             config.clojure_fixed_indent,
+                            dialect,
                         ),
                     },
                     None => 0,

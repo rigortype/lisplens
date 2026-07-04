@@ -4,52 +4,103 @@ Ephemeral snapshot. **Durable knowledge is in the dev docs** (see `AGENTS.md` �
 Codebase): `docs/dev/architecture.md`, `docs/dev/formatter.md`, `CONTEXT.md`,
 `docs/adr/`.
 
-## Handoff — resume here (2026-07-04 session end)
+## Handoff — resume here: the Phel branch is unblocked and consumed; merge PR #11
 
-**Git.** On **`master`** at `aec32b9`, synced with `origin/master`; tree clean.
-**PR #2 is merged** (`aec32b9` merge commit) — the **`rewrite` + `extract`** work
-(`9398d9c` rewrite design ADR-0033 · `7f1a24a` rewrite impl · `2ea3fe2` rewrite
-cookbook `docs/rewrite.md` · `b56f8d4` extract ADR-0034), CI green. `master` now
-also has: the polyglot formatter (EL/CL/Scheme + fallback, ADR-0031), display-width
-columns, the PostToolUse `cargo fmt` hook, and **merged PR #1**
-(`check`/`rename`/`inline` + ADR-0032).
+**Where.** On branch **`design/phel-engine`** (PR #11, open), rebased onto
+`origin/master` — now **three** commits (the Phel indent engine ADR-0041, the
+consolidated `docs/lispexp-feedback/`, and the lispexp 0.7.0 consumption). `master`
+has everything up to the Clojure work + PR #12 (the AGENTS ground rule). The Clojure
+engine (ADR-0039/0040 + fidelity fixes) is **merged to master** via PRs #7/#8/#9/#10;
+Phel (ADR-0041) is PR #11.
 
-**Immediate next step:** pick from the candidate next work below. CI runs
-`cargo fmt --check` on `dtolnay/rust-toolchain@stable` — **keep the local toolchain
-on CI's stable** (`rustup update stable`; currently rustc 1.96.1) or the Format step
-fails on version drift; CI's Docs step is `cargo doc --no-deps` with
-`RUSTDOCFLAGS=-D warnings` (no public doc linking to a private item).
+**Unblocked — lispexp 0.7.0 + lispexp-emacs 0.2.0 landed and are consumed** (commit
+`2793692`). The four upstream feedback notes the branch was blocked on are all
+**resolved** and marked so in `docs/lispexp-feedback/` (index in its `README.md`):
+- **0003** `#_`/`#;` discarded forms → `Options.keep_discarded`. Formatter parses
+  with it set (`src/format/mod.rs`); a kept discard *counts* as a value child for the
+  Clojure `:inner`/`:block` model — matching cljfmt (a `#_` in a body slot degrades
+  the block to default exactly as a real form would). **Re-validated vs `cljfmt fix`**
+  on reitit/ring/hiccup/malli/integrant (373 files, **zero** code-indent divergences;
+  the six former `#_`-residual files now match). The tempting "skip discards for arg
+  indexing" filter was tried and **reverted** — it broke `malli/core.cljc` (a `#_lazy`
+  in an `if` body); counting matches cljfmt, so *keep it simple: parse-flag only*.
+- **0004/0005/0006** Phel `;`-in-symbol / `|(…)` short-fn / `\Foo\Bar` FQN → the Phel
+  preset knobs (`line_comment_in_atom`, `pipe_anon_fn`, `CharSyntax::BackslashFqn`),
+  auto-applied by `Options::for_dialect(Phel)`. All 260 phel-lang files parse clean;
+  targeted forms byte-exact vs `phel format`.
 
-**Quality gate (all green):** 160 tests, `cargo fmt --check`,
+**Version-conflict gotcha (cost a beat this session):** `lispexp = "0.7"` alone does
+not build — `lispexp-emacs` pins `lispexp` (`^0.6` → `^0.7`), so both crates must
+move together (bump `lispexp-emacs = "0.2"`), else two lispexp versions coexist and
+`bundled_table`'s `IndentTable`/`Dialect` clash. The maintainer republished
+lispexp-emacs 0.2.0 against 0.7 in the same drop.
+
+**Next step: merge PR #11.** Consider a light follow-up: re-run the full eight-repo
+Clojure harness (add clj-kondo/next.jdbc/jsonista — only five repos were re-run this
+session) and confirm the fixed/Tonsky style still has only the one documented
+`(#?(…) …)` reader-conditional-headed off-by-one (two files saw it in the five-repo
+run; both that class, not `#_`).
+
+**Process rules learned this session (also in AGENTS + memory):** never edit/commit/PR
+the **lispexp** repo — record in `docs/lispexp-feedback/`. Interactive doc edits may
+commit on **`master`** directly; **never push `master` without explicit permission**;
+topic branches — push/force-push freely.
+
+**Quality gate (all green on #11):** 164 tests, `cargo fmt --check`,
 `clippy --all-targets`, `RUSTDOCFLAGS=-D warnings cargo doc --no-deps`; tree clean.
-40 ADRs.
+41 ADRs. CI runs `cargo fmt --check` on `dtolnay/rust-toolchain@stable` — keep the
+local toolchain on CI stable (`rustup update stable`) or the Format step drifts.
 
 **Gotchas.**
-- A committed **PostToolUse hook** (`.claude/settings.json`, force-tracked past the
-  global gitexclude) auto-runs `cargo fmt` after any `.rs` Edit/Write — expect
-  post-edit reformats; keep the toolchain on CI stable so local ≡ CI.
-- The formatter fidelity **flat-harness has a `lisp-indent-defmethod` caveat**
-  (de-indenting all lines breaks Emacs's `beginning-of-defun`; lisplens is right,
-  the harness's Emacs is wrong). See `docs/dev/formatter.md`.
-- `rewrite` matches **quoted data too** (whole-tree) and is **not**
-  behaviour-preserving — a "structural sed".
+- A committed **PostToolUse hook** (`.claude/settings.json`) auto-runs `cargo fmt`
+  after any `.rs` Edit/Write — expect post-edit reformats.
+- **cljfmt reads `.cljfmt.edn` from CWD**, not the target file's dir — pass
+  `--config … --no-read-clj-config-files` in the Clojure harness or it silently uses
+  the default (semantic) config (cost us 192 false divergences once).
+- The Clojure/Phel engine is shared (`Engine::Clojure`, `rules_for(name, dialect)`);
+  Phel's one `:block` difference is body-indenting *special* args too (see ADR-0041).
+- Phel value-aligns binding vectors and the flat-harness `lisp-indent-defmethod`
+  caveat remain out of scope / documented.
 
-**The ADR-0032 refactoring family is COMPLETE** — `check` / `rename` / `inline` /
-`rewrite` / `extract`, all in `src/refactor.rs`. Design: ADR-0032 (family), ADR-0033
-(rewrite pattern language + `CONTEXT.md` vocabulary + `docs/rewrite.md` cookbook),
-ADR-0034 (extract). Per-member detail below.
-
-**Candidate next work:** (a) remaining `extract` opt-ins — free-var **inference**
-(binding analysis; still crosses the ADR-0003 ceiling), skeleton auto-discovery for
-`--also`, multi-*file* extraction, `--also` over sibling runs (block `anchor+count`
-**done**, ADR-0035; non-`defun` kinds **done**, ADR-0036; identical multi-site
-**done**, ADR-0037; generalizing multi-site / anti-unification **done**, ADR-0038);
-(b) formatter
-long tail / native indenters for non-bundled dialects (Deferred list below);
+**Candidate next work (after #11 lands):** (a) remaining `extract` opt-ins —
+free-var **inference**, skeleton auto-discovery for `--also`, multi-*file* extraction;
+(b) native indenters for the other non-bundled dialects (Fennel/Janet/Hy/LFE);
 (c) move `calculate-lisp-indent` into `lispexp-emacs`
 (`docs/notes/20260704-delegation-boundary-review.md`).
 
 ## Now
+
+- **lispexp 0.7.0 + lispexp-emacs 0.2.0 consumed — Phel branch unblocked**
+  (commit `2793692`). The four blocking feedback notes (0003 `#_`/`#;` discards;
+  0004/0005/0006 Phel `;`-in-symbol / `|(…)` / `\Foo\Bar` FQN) are all **resolved
+  upstream and consumed**. The formatter parses with `Options.keep_discarded`, so a
+  `#_`-discard stays in the tree and lines inside it indent against it — and it
+  *counts* as a value child for the `:inner`/`:block` model, matching cljfmt (an
+  arg-skipping filter was tried and reverted; it regressed `malli/core.cljc`).
+  Re-validated **zero code-indent divergences** vs `cljfmt fix` on 373 Clojure files
+  (the six former `#_`-residual files now match) and **0 parse errors** across 260
+  phel-lang files, with the Phel reader forms byte-exact vs `phel format`. 3 new
+  regression goldens; 164 tests. Feedback 0003-0006 marked resolved; formatter.md /
+  ADR-0041 limitation wording updated. **Next: merge PR #11.**
+
+- **Native Phel indent engine landed** (ADR-0041) — Phel (a Clojure-inspired Lisp
+  compiling to PHP) no longer rides the generic Emacs Lisp fallback. `phel format`
+  turns out to be a **PHP port of cljfmt's `:inner`/`:block` model**, so
+  `Dialect::Phel` routes to `Engine::Clojure` with a per-dialect table
+  (`rules_for(name, dialect)` + `phel_rules_for` = Phel's
+  `FormatterFactory::{INNER,BLOCK}_INDENT_SYMBOLS`, phel-lang 0.47 verbatim). Phel is
+  a strict subset (only `[:inner 0]`/`[:block N]`, no nested inner/regex/reader-cond)
+  with **one `:block` difference**: Phel body-indents a block form's *special* args
+  too once the body breaks (`(when-not⏎(test)⏎(body))` → both at +2), where cljfmt
+  keeps the test at +1 — `block_indent` takes the dialect and skips the special-arg
+  default only for non-Phel. Phel joins `has_native_engine` (auto-reindent on edit).
+  Oracle: `phel format` (PHP+Composer+phel installed). Validated **byte-exact
+  307/310** on phel-lang's own `.phel` files; the 3 residuals: a `;`-inside-a-symbol
+  lispexp tokeniser gap (`docs/lispexp-feedback/0004`, upstream) and two niche
+  one-liners (closing `])` after inline comments; a `#(…)` doc-example off-by-one).
+  Phel value-aligns binding vectors (like cljfmt's opt-in alignment) — out of scope
+  for a leading-whitespace formatter. 161 tests (Phel golden). Third oracle
+  (`phel format`) joins Emacs and cljfmt.
 
 - **Clojure engine validated on 8 repos + metadata/prefix-head fixes** (follow-up
   to ADR-0039/0040). Expanded the real-code validation to **eight** repos (hiccup,

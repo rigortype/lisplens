@@ -30,7 +30,7 @@
 //! fallbacks → `[:inner 0]`. Like every engine here it only rewrites leading
 //! whitespace, so it is always parse-safe.
 
-use lispexp::{Datum, DatumKind, Delim};
+use lispexp::{Datum, DatumKind, Delim, Dialect};
 
 use super::Cols;
 
@@ -58,6 +58,7 @@ pub(super) fn indent(
     offset: usize,
     body: usize,
     fixed: bool,
+    dialect: Dialect,
 ) -> usize {
     let DatumKind::List { items, delim, .. } = &c.kind else {
         return 0;
@@ -73,7 +74,11 @@ pub(super) fn indent(
     // of value children that begin before this line; the line's element is
     // `items[pos]` at arg index `pos - 1` (head is `items[0]`). A child is anchored
     // at its *form* start, past any leading `^metadata` prefix (which may sit on the
-    // head line while the form itself wraps to this one).
+    // head line while the form itself wraps to this one). A `#_`-discarded form is
+    // kept in the tree (`Options.keep_discarded`) and **counts as a value child** —
+    // matching cljfmt, which walks every node: a discard in a body slot makes the
+    // block degrade to default alignment exactly as a real form would, and a line
+    // *inside* a multi-line discard indents against it via `container_at`.
     let pos = items
         .iter()
         .filter(|it| (form_start(it) as usize) < offset)
@@ -100,17 +105,17 @@ pub(super) fn indent(
         };
     }
 
-    if inner_applies(&stack, offset) {
+    if inner_applies(&stack, offset, dialect) {
         return open_col + body;
     }
 
     // `:block N` on the head symbol, else default alignment.
     if let Some(head) = items.first().and_then(head_symbol) {
-        if let Some(n) = rules_for(head).iter().find_map(|r| match r {
+        if let Some(n) = rules_for(head, dialect).iter().find_map(|r| match r {
             Rule::Block(n) => Some(*n),
             Rule::Inner { .. } => None,
         }) {
-            return block_indent(cols, items, open_col, offset, arg_index, n, body);
+            return block_indent(cols, items, open_col, offset, arg_index, n, body, dialect);
         }
     }
     default_indent(cols, items, open_col)
@@ -121,7 +126,7 @@ pub(super) fn indent(
 /// (and, when the rule has an `idx`, the node descends through that form's `idx`-th
 /// argument). `stack` is outermost→innermost; the node's immediate container is
 /// `stack.last()`.
-fn inner_applies(stack: &[&Datum], offset: usize) -> bool {
+fn inner_applies(stack: &[&Datum], offset: usize, dialect: Dialect) -> bool {
     let n = stack.len();
     for depth in 0..MAX_DEPTH.min(n) {
         // The ancestor `depth` levels above the immediate container `stack[n-1]`.
@@ -132,7 +137,7 @@ fn inner_applies(stack: &[&Datum], offset: usize) -> bool {
         let Some(head) = items.first().and_then(head_symbol) else {
             continue;
         };
-        for rule in rules_for(head) {
+        for rule in rules_for(head, dialect) {
             let Rule::Inner { depth: d, idx } = rule else {
                 continue;
             };
@@ -166,8 +171,14 @@ fn arg_index_in(items: &[Datum], child: &Datum, _offset: usize) -> Option<usize>
         .map(|p| p.saturating_sub(1))
 }
 
-/// `[:block N]`: args `< N` use default; body args `≥ N` get `open + body` when the
-/// first body form (arg `N`, i.e. `items[N + 1]`) begins its own line, else default.
+/// `[:block N]`: whether the current line gets body indent (`open + body`) or the
+/// default alignment turns on the **first body form** (arg `N`, i.e. `items[N + 1]`)
+/// — if it begins its own line, the form is in body layout. The two dialects then
+/// differ on the *special* args (`arg_index < N`): cljfmt keeps them on the default
+/// alignment (open+1 when they wrap); **Phel** indents them at `open + body` too
+/// (its `BlockIndenter` applies the inner indent to every child once the body
+/// breaks). Reference: cljfmt `core.cljc`; Phel `BlockIndenter.php`.
+#[allow(clippy::too_many_arguments)]
 fn block_indent(
     cols: &Cols,
     items: &[Datum],
@@ -176,8 +187,11 @@ fn block_indent(
     arg_index: usize,
     n: usize,
     body: usize,
+    dialect: Dialect,
 ) -> usize {
-    if arg_index < n {
+    // cljfmt: a special arg always uses the default alignment. Phel does not
+    // special-case them (once the body breaks, every child is body-indented).
+    if !matches!(dialect, Dialect::Phel) && arg_index < n {
         return default_indent(cols, items, open_col);
     }
     match items.get(n + 1) {
@@ -362,11 +376,21 @@ fn push_containers<'a, 't>(
     }
 }
 
+/// The indent rules for `name`, per dialect: cljfmt's table for Clojure, Phel's own
+/// table for Phel (ADR-0041). Both share the `:inner`/`:block` model and this
+/// engine; only the symbol set differs.
+fn rules_for(name: &str, dialect: Dialect) -> &'static [Rule] {
+    match dialect {
+        Dialect::Phel => phel_rules_for(name),
+        _ => clojure_rules_for(name),
+    }
+}
+
 /// cljfmt's default indent rules (`indents/clojure.clj` + the merged `compojure.clj`
 /// and `fuzzy.clj`), verbatim. Returns the rule(s) for `name`, or `&[]` for a plain
 /// function call — with the `def…`/`with-…` regex fallbacks applied. Names are
 /// matched bare (namespace already stripped by [`head_symbol`]).
-fn rules_for(name: &str) -> &'static [Rule] {
+fn clojure_rules_for(name: &str) -> &'static [Rule] {
     use Rule::{Block, Inner};
     const B0: &[Rule] = &[Block(0)];
     const B1: &[Rule] = &[Block(1)];
@@ -412,6 +436,41 @@ fn rules_for(name: &str) -> &'static [Rule] {
     }
 }
 
+/// Phel's indent table (`phel format`, `FormatterFactory::{INNER,BLOCK}_INDENT_SYMBOLS`,
+/// ADR-0041), verbatim. Phel only uses `[:inner 0]` and `[:block N]` — no nested
+/// `:inner`, no regex fallback, no reader conditionals — so it is a strict subset of
+/// the shared model.
+fn phel_rules_for(name: &str) -> &'static [Rule] {
+    use Rule::{Block, Inner};
+    const B0: &[Rule] = &[Block(0)];
+    const B1: &[Rule] = &[Block(1)];
+    const B2: &[Rule] = &[Block(2)];
+    const I0: &[Rule] = &[Inner {
+        depth: 0,
+        idx: None,
+    }];
+    match name {
+        // INNER_INDENT_SYMBOLS
+        "def" | "def-" | "defn" | "defn-" | "defmacro" | "defmacro-" | "deftest" | "fn"
+        | "defstruct" | "defrecord" | "definterface" | "defexception" | "defenum"
+        | "defprotocol" | "defmulti" | "defmethod" | "defonce" | "reify" => I0,
+
+        // BLOCK_INDENT_SYMBOLS => 0
+        "do" | "cond" | "try" | "finally" | "with-output-buffer" | "delay" | "lazy-seq" => B0,
+
+        // BLOCK_INDENT_SYMBOLS => 1
+        "if" | "if-not" | "foreach" | "for" | "dofor" | "let" | "ns" | "loop" | "case" | "when"
+        | "when-not" | "when-let" | "when-some" | "if-let" | "if-some" | "binding"
+        | "when-first" | "doseq" | "dotimes" | "letfn" | "with-redefs" | "with-bindings"
+        | "extend-type" | "extend-protocol" => B1,
+
+        // BLOCK_INDENT_SYMBOLS => 2
+        "catch" | "condp" => B2,
+
+        _ => &[],
+    }
+}
+
 /// cljfmt's `^def(?!ault)(?!late)(?!er)` fallback: a `def…` head, but not `default`,
 /// `deflate`, or `defer` (which are ordinary function calls).
 fn is_def_like(name: &str) -> bool {
@@ -440,6 +499,12 @@ mod tests {
             ..FormatConfig::default()
         };
         crate::format::format(input, &config, Dialect::Clojure)
+    }
+
+    /// Reindent Phel, whose engine shares this model with a Phel-specific table
+    /// (ADR-0041); the oracle is `phel format`.
+    fn fmt_phel(input: &str) -> String {
+        crate::format::format(input, &FormatConfig::default(), Dialect::Phel)
     }
 
     #[test]
@@ -635,6 +700,44 @@ y)";
     }
 
     #[test]
+    fn discarded_form_interior_indents_against_the_discard() {
+        // With `keep_discarded` the reader keeps a `#_`-discarded form in the tree
+        // (as `Prefixed { Discard, … }`), so lines *inside* a multi-line discard
+        // indent against the discarded collection, not the enclosing container —
+        // matching cljfmt (which keeps every node). Regression for feedback 0003.
+        let input = "\
+[a
+#_[\"/spec\" {:c d}
+[\"/x\" {:p 1}]]
+b]";
+        let want = "\
+[a
+ #_[\"/spec\" {:c d}
+    [\"/x\" {:p 1}]]
+ b]";
+        assert_eq!(fmt(input), want, "\n{}", fmt(input));
+    }
+
+    #[test]
+    fn discard_in_a_body_slot_counts_like_a_real_form() {
+        // A kept `#_` discard counts as a value child for the call/block model —
+        // cljfmt walks every node. Here `#_lazy` sits in `if`'s (`:block 1`) body
+        // slot on the head line, so the block degrades to default alignment (under
+        // the condition `true`), just as a real form on the head line would. This is
+        // the common real-world shape (a `#_` commenting out a form) — validated
+        // byte-exact vs cljfmt on the malli/reitit corpora. Regression for 0003.
+        let input = "\
+(if true #_lazy
+(a)
+(b))";
+        let want = "\
+(if true #_lazy
+    (a)
+    (b))";
+        assert_eq!(fmt(input), want, "\n{}", fmt(input));
+    }
+
+    #[test]
     fn already_formatted_is_a_fixed_point() {
         let input = "\
 (defn process [input]
@@ -678,6 +781,68 @@ y)
 #(foo %
    %2)";
         assert_eq!(fmt_fixed(input), want, "\n{}", fmt_fixed(input));
+    }
+
+    #[test]
+    fn phel_indentation() {
+        // Phel uses the same engine with its own table (ADR-0041): `defn`/`defstruct`
+        // are `:inner 0`, `when`/`foreach`/`condp` are `:block`. Unlike cljfmt, a
+        // block form's *special* args also get the +2 body indent once the body
+        // breaks (`when-not`, `condp` head-alone). Goldens from `phel format`.
+        let input = "\
+(defn f [x]
+(when x
+(foo)
+(bar)))
+(foreach [a xs]
+(println a))
+(when-not
+(test)
+(body))
+(condp
+=
+x
+y)
+(defstruct Point [x y])";
+        let want = "\
+(defn f [x]
+  (when x
+    (foo)
+    (bar)))
+(foreach [a xs]
+  (println a))
+(when-not
+  (test)
+  (body))
+(condp
+  =
+  x
+  y)
+(defstruct Point [x y])";
+        assert_eq!(fmt_phel(input), want, "\n{}", fmt_phel(input));
+    }
+
+    #[test]
+    fn phel_reader_constructs_indent_cleanly() {
+        // Phel-specific reader forms fixed upstream in lispexp 0.7 (feedback
+        // 0004/0005/0006): a `|(…)` short anonymous function, PHP fully-qualified
+        // names (`\RuntimeException`, `\Phel\Lang\Symbol/create`), and a symbol with
+        // an interior `;` (`'*_.%;!:+-?`). Each now reads as one structurally-correct
+        // form, so a call's arg count — and thus its body indent — is right. Golden
+        // captured byte-exact from `phel format`.
+        let input = "\
+(defn f [x]
+(map |(inc $) x)
+(php/new \\RuntimeException \"boom\")
+(\\Phel\\Lang\\Symbol/create \"s\")
+(def sym '*_.%;!:+-?))";
+        let want = "\
+(defn f [x]
+  (map |(inc $) x)
+  (php/new \\RuntimeException \"boom\")
+  (\\Phel\\Lang\\Symbol/create \"s\")
+  (def sym '*_.%;!:+-?))";
+        assert_eq!(fmt_phel(input), want, "\n{}", fmt_phel(input));
     }
 
     #[test]

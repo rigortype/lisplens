@@ -14,13 +14,22 @@ Emacs indenter; a fourth (Clojure) ports cljfmt:
 | `Engine::Elisp` | `lisp-mode.el` `lisp-indent-function` | Emacs Lisp + **generic fallback** for the rest |
 | `Engine::CommonLisp` | `cl-indent.el` `common-lisp-indent-function` | Common Lisp |
 | `Engine::Scheme` | `scheme.el` `scheme-indent-function` | Scheme, Guile, Racket, Gauche, Mosh, Gambit, superset |
-| `Engine::Clojure` | **cljfmt** `:inner`/`:block` (ADR-0039) | Clojure |
+| `Engine::Clojure` | **cljfmt** `:inner`/`:block` (ADR-0039); **`phel format`** for Phel (ADR-0041) | Clojure, Phel |
 
 The driver (`src/format/mod.rs`) owns the per-line loop, string/comment rules,
 touched-region masking, `Cols` column arithmetic, and rendering; each engine only
 answers "what column does this code line indent to?". `has_native_engine`
-(Emacs Lisp, Common Lisp, the Scheme family, and Clojure) gates auto-format-on-edit
-— the generic fallback formats only on an explicit `format` (ADR-0031).
+(Emacs Lisp, Common Lisp, the Scheme family, Clojure, and Phel) gates
+auto-format-on-edit — the generic fallback formats only on an explicit `format`
+(ADR-0031). `Engine::Clojure` serves both Clojure and **Phel** (a Clojure-inspired
+Lisp compiling to PHP): same `:inner`/`:block` algorithm, a per-dialect rule table
+(`rules_for(name, dialect)`), and one `:block` difference — Phel body-indents a
+block form's *special* args too once the body breaks, cljfmt keeps them aligned.
+Phel's oracle is `phel format` (byte-exact on phel-lang's own `.phel` files). Since
+lispexp 0.7.0 the Phel reader gaps (feedback 0004/0005/0006 — `;`-in-symbol, `|(…)`
+short-fn, `\Foo\Bar` FQN) are all resolved; the whole corpus parses clean and the
+only residual is the shared driver's closing-bracket-after-inline-comment case (a
+niche one-liner, ADR-0041).
 
 ## Emacs Lisp engine
 
@@ -286,13 +295,15 @@ Fidelity is validated against `cljfmt fix` — see the harness section. On **eig
 repos** (hiccup, ring, reitit, clj-kondo, next.jdbc, malli, integrant, jsonista —
 663 real `.clj/.cljs/.cljc`, excluding clj-kondo's deliberately-malformed linter
 fixtures) lisplens is byte-exact with cljfmt on code-line indentation in the
-**semantic** style with **zero** non-`#_` divergences; the ~20 residual files are
-**all** `#_`-discarded multi-line forms. The **fixed** style matches too, with one
-residual off-by-one in an obscure `(#?(…) …)` reader-conditional-headed call. Known
-limitations: (1) comment-only line indentation is the shared driver's and may differ
-from cljfmt; (2) lispexp drops `#_`-discarded forms from the tree, so lines *inside*
-a discarded multi-line form indent against the enclosing form rather than the
-discarded one — documented in `docs/lispexp-feedback/0003-discarded-forms-dropped.md`.
+**semantic** style with **zero** divergences. This includes `#_`-discarded
+multi-line forms: since lispexp 0.7.0 the formatter parses with
+`Options.keep_discarded`, so a discard stays in the tree (as `Prefixed { Discard }`)
+and lines *inside* it indent against the discarded form — and a discard *counts* as
+a value child for the `:inner`/`:block` model, matching cljfmt (feedback 0003, now
+resolved). The **fixed** style matches too, with one residual off-by-one in an
+obscure `(#?(…) …)` reader-conditional-headed call. The one remaining known
+limitation is that comment-only line indentation is the shared driver's and may
+differ from cljfmt.
 
 ## Fidelity harness (the main tool for first release)
 
@@ -379,10 +390,11 @@ diff mine.el em.el
 
   On broad realistic corpora (ns/require, destructuring, nested `let`/`try`,
   threading, `defmulti`/`defmethod`, `deftype`/`reify`/`letfn`, `defmacro` with
-  backquote, `condp`, `#(…)`, `#?(…)`, metadata) lisplens is byte-exact vs cljfmt in
-  **both** styles across eight repos (663 real files) — semantic with **zero**
-  non-`#_` divergences, all residuals the `#_`-discard limitation. Known limitation:
-  comment-only lines are the shared
+  backquote, `condp`, `#(…)`, `#?(…)`, `#_`-discards, metadata) lisplens is
+  byte-exact vs cljfmt in **both** styles across eight repos (663 real files) —
+  semantic with **zero** divergences (the former `#_`-discard residuals resolved by
+  `Options.keep_discarded`, lispexp 0.7.0). Known limitation: comment-only lines are
+  the shared
   driver's, not the engine's, and can differ from cljfmt.
 - For a Nameless corpus (`~/repo/emacs/php-mode/lisp`), format with
   `lisplens format --nameless` and enable Nameless on the Emacs side:
