@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - `--dialect NAME` — force the dialect for a single-file command (kebab-case, e.g. `--dialect islisp`) instead of guessing from the file extension, so an ambiguous extension like `.lsp` (Common Lisp / AutoLISP / ISLisp) can be read as the one you mean. Project-wide `find`/`refs` keep their per-file guess.
+- **Native indent engines for Fennel, Janet, Hy, and LFE** (ADR-0043). `format` now indents `.fnl`/`.janet`/`.hy`/`.lfe` natively instead of through the generic Emacs Lisp fallback: a special form body-indents its children at `open + 2` and every other call aligns under its first argument. Fennel and Janet take their special-form tables from their own formatters (`fnlfmt`, `spork/fmt`); Hy and LFE — which have no canonical formatter — take an induced table recovered from their corpora. On each dialect's own sources this lifts code-line indentation match from ~16–50% (fallback) to 67–92% (Fennel 91.7%, Janet 80.2%, LFE 74.4%, Hy 67.3%). Every dialect lisplens recognises by extension now has a native engine.
 
 ## [0.2.0] - 2026-07-04
 
