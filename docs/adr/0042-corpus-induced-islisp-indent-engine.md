@@ -119,6 +119,16 @@ Accepted — implemented as an **opt-in style** in `src/format/clojure.rs`
   minimal table) rather than prescriptive; it normalises toward the plurality style.
   Self-consistency is bounded by how consistent the corpus itself is — an honest
   limit, reported per corpus, never presented as byte-exact against a spec.
+- **This engine encodes the EISL *community's* style, not "ISLisp" universally.** A
+  cross-check against other ISLisp implementations (design note, "Cross-implementation
+  check") found the same language hosts divergent styles: KISS
+  (github.com/nenbutsu/kiss) is Common-Lisp-styled (body **+2**, `if`/`cond` align) and
+  the Common Lisp engine already fits it at ~81%, while this edlis-based engine fits it
+  only ~20%. So `--dialect islisp` is the right choice for EISL-style code; CL-styled
+  ISLisp (KISS, and likely OpenLisp) should use `--dialect common-lisp`. The broader
+  lesson — indentation style is a property of a corpus/community, not a language — points
+  to per-project **style detection** as the eventual home for this, rather than one fixed
+  engine per dialect.
 - Deferred: the finer per-form body width (some specials cluster at 2/3, not just 4 —
   the corpus is not uniform); graduating the learner from the scratchpad PoC into
   repo tooling; and applying the method to the other fallback dialects.
