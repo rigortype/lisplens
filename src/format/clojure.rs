@@ -455,18 +455,31 @@ fn janet_rules_for(name: &str) -> &'static [Rule] {
             | "forv"
             | "compwhen"
             | "compif"
+            | "comp-unless"
             | "ev/spawn"
             | "ev/do-thread"
             | "ev/spawn-thread"
             | "ev/with-deadline"
             | "label"
             | "prompt"
+            // corpus-attested, beyond spork/fmt's core list: `comment`/`struct`,
+            // the `each-i`/`ev` variants, and spork/test's assertion macros.
+            | "comment"
+            | "struct"
+            | "each-i"
+            | "spawn"
+            | "spawn-nursery"
+            | "assert-no-error"
+            | "capture-stdout"
+            | "test-stderr"
     );
     if listed
         || name.starts_with("def")
         || name.starts_with("with-")
         || name.starts_with("if-")
         || name.starts_with("when-")
+        // jpm's `declare-project`/`declare-native`/`declare-source`/… build forms.
+        || name.starts_with("declare-")
     {
         I0
     } else {

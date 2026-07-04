@@ -39,8 +39,10 @@ mapping its special set to `[:inner 0]` and everything else to the default:
 
 - `fennel_rules_for` — `fnlfmt`'s set plus corpus-attested additions
   (`accumulate`/`case`/`case-try`/`match-try`, …).
-- `janet_rules_for` — `spork/fmt`'s `*default-indent-2-forms*` verbatim, with the
-  same `def`/`var`/`with-`/`if-`/`when-` prefix fuzzy-match.
+- `janet_rules_for` — `spork/fmt`'s `*default-indent-2-forms*` with the same
+  `def`/`var`/`with-`/`if-`/`when-` prefix fuzzy-match, plus the jpm `declare-*` build
+  family and corpus-attested forms it omits (`comp-unless`, `comment`, `spork/test`
+  assertions).
 - `hy_rules_for` / `lfe_rules_for` — induced from the corpus, pruned of obvious
   function false-positives.
 
@@ -59,7 +61,7 @@ Emacs Lisp fallback:
 | dialect | files | native engine | fallback |
 | --- | --- | --- | --- |
 | Fennel | 91 | **91.7%** | 19.5% |
-| Janet  | 210 | **80.2%** | 16.7% |
+| Janet  | 210 | **81.3%** | 16.7% |
 | Hy     | 76  | **67.3%** | 16.0% |
 | LFE    | 68  | **74.4%** | 49.5% |
 
@@ -75,9 +77,16 @@ table. All four are a large improvement (+25 to +72 points) over the fallback.
   own formatter (Fennel/Janet, like Phel from `phel format`) or **induce** it from
   the corpus (Hy/LFE, like ISLisp from EISL). Same `[:inner 0]`-shaped output either
   way.
-- Deferred refinements, honest about the residual: **Janet collections** — `spork/fmt`
-  body-indents `[…]`/`@[…]`/`{…}`/`@{…}` at `+2`, whereas the shared engine aligns
-  them under the first element; teaching the engine a per-dialect collection mode
-  would lift Janet's ~80% further. Hy's lower number reflects a less consistently
-  formatted corpus (no formatter to normalise it). Per-form nuances (e.g. LFE `if`
-  vs a two-space body) remain in the corpus noise.
+- Honest about the residual. A Janet refinement pass (81.0 → 81.3% overall) added the
+  general forms the corpus attests but `spork/fmt`'s core list omits — the jpm
+  `declare-*` build family, `comp-unless`, `comment`, and `spork/test`'s assertion
+  macros. Two earlier suspicions did **not** pan out: (1) `spork/fmt` in fact aligns
+  collections (`[…]`/`@[…]`/`{…}`/`@{…}`) under their first element — which the shared
+  engine already does correctly — not body-indent them, so there is no collection gap;
+  (2) the remaining ~19% is **not** a systematic engine issue but is dominated by a few
+  **project-specific-macro-heavy files** (`gfx2d-codegen.janet`, `charts.janet`,
+  `tm_lang_gen.janet`) whose own file-local macros a general table cannot know —
+  excluding the top handful, real Janet code matches ~88%. This is cljfmt's
+  `:extra-indents` territory; the eventual home is per-project indent config, not a
+  bigger built-in table. Hy's lower number likewise reflects an un-normalised (no
+  formatter) corpus.
