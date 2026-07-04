@@ -266,16 +266,29 @@ metadata never consume a slot):
 
 The bundled table `rules_for` is cljfmt's `indents/clojure.clj` (plus the merged
 `compojure.clj`/`fuzzy.clj` defaults), verbatim. `[:block N]` differs from Emacs's
-integer spec: it does **not** double-indent the special args. Metadata `^{…} form`
-holds its map in the `Prefixed` node's `arg`, so `container_at` and `in_string`
-descend `arg` too (a shared-driver fix, ADR-0039 follow-up) — the map's keys align
-under the first key and a docstring inside metadata stays untouched.
+integer spec: it does **not** double-indent the special args.
 
-Fidelity is validated against `cljfmt fix` — see the harness section. On the
-reitit + ring + hiccup corpora (272 files) lisplens is byte-exact with cljfmt on
-**268**; the residual 4 are all **`#_`-discarded multi-line forms** (see below), and
-a handful of files differ only in comment-only-line indentation or trailing/internal
-whitespace (out of scope — `format` rewrites leading whitespace only). Known
+**Metadata and prefixed heads** (pinned on the wider corpora below):
+- `^{…} form` holds its map in the `Prefixed` node's `arg`, so `container_at` and
+  `in_string` descend `arg` too — the map's keys align under the first key and a
+  docstring inside metadata stays untouched.
+- An argument is located by its **form** start, past any `^metadata` prefix
+  (`form_start`): a `^Tag` sitting on the head line while its form wraps to the next
+  does not make the argument look "already completed" (so `(doto ^Tag⏎(f)⏎(g))`
+  keeps `(f)` as the special arg). The *alignment column*, though, is the element's
+  true start — cljfmt aligns a continuation under the `^`.
+- A `^meta` **head** is transparent for rule lookup (`(^:m when …)` uses `when`'s
+  `:block 1`), but a quote / var-quote / unquote head is **not** a symbol head
+  (`(#'foo …)`, `('foo …)` → default alignment) — cljfmt keys rules on the bare
+  symbol token, unlike the Emacs engines' transparent `backward-prefix-chars`.
+
+Fidelity is validated against `cljfmt fix` — see the harness section. On **eight
+repos** (hiccup, ring, reitit, clj-kondo, next.jdbc, malli, integrant, jsonista —
+663 real `.clj/.cljs/.cljc`, excluding clj-kondo's deliberately-malformed linter
+fixtures) lisplens is byte-exact with cljfmt on code-line indentation in the
+**semantic** style with **zero** non-`#_` divergences; the ~20 residual files are
+**all** `#_`-discarded multi-line forms. The **fixed** style matches too, with one
+residual off-by-one in an obscure `(#?(…) …)` reader-conditional-headed call. Known
 limitations: (1) comment-only line indentation is the shared driver's and may differ
 from cljfmt; (2) lispexp drops `#_`-discarded forms from the tree, so lines *inside*
 a discarded multi-line form indent against the enclosing form rather than the
@@ -366,9 +379,10 @@ diff mine.el em.el
 
   On broad realistic corpora (ns/require, destructuring, nested `let`/`try`,
   threading, `defmulti`/`defmethod`, `deftype`/`reify`/`letfn`, `defmacro` with
-  backquote, `condp`, `#(…)`, `#?(…)`) lisplens is byte-exact vs cljfmt in **both**
-  the semantic and the Tonsky style (reitit + ring + hiccup: 268/272, the residual 4
-  the `#_`-discard limitation). Known limitation: comment-only lines are the shared
+  backquote, `condp`, `#(…)`, `#?(…)`, metadata) lisplens is byte-exact vs cljfmt in
+  **both** styles across eight repos (663 real files) — semantic with **zero**
+  non-`#_` divergences, all residuals the `#_`-discard limitation. Known limitation:
+  comment-only lines are the shared
   driver's, not the engine's, and can differ from cljfmt.
 - For a Nameless corpus (`~/repo/emacs/php-mode/lisp`), format with
   `lisplens format --nameless` and enable Nameless on the Emacs side:
