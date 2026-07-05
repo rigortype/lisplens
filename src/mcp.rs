@@ -1,9 +1,11 @@
 //! A minimal MCP server over stdio (ADR-0020), hand-rolled on newline-delimited
 //! JSON-RPC 2.0 with `serde_json` — no async runtime.
 //!
-//! Exposes the same surface as the CLI as tools: `struct_read`, `line_read`,
-//! `struct_edit`, `line_edit`, `find`, `refs`. Tool failures are returned as a
-//! result with `isError: true` (per MCP), not a JSON-RPC error.
+//! Exposes the same surface as the CLI as tools: reads (`struct_read`,
+//! `line_read`), edits (`struct_edit`, `line_edit`), queries (`find`, `refs`),
+//! `format`/`check`, and the refactoring procedures (`rename`, `inline`,
+//! `docstring`, `rewrite`, `extract`). Tool failures are returned as a result
+//! with `isError: true` (per MCP), not a JSON-RPC error.
 
 use std::io::{BufRead, Write};
 use std::path::Path;
@@ -72,6 +74,7 @@ fn tools() -> Value {
     let from = json!({ "type": "string", "description": "the symbol to rename" });
     let to = json!({ "type": "string", "description": "the new symbol name" });
     let rspec = json!({ "type": "string", "description": "rewrite spec: pattern <<TAG … TAG / template <<TAG … TAG (ADR-0033)" });
+    let docstring_text = json!({ "type": "string", "description": "the docstring text (raw; escaped into a string literal)" });
     let dir = json!({ "type": "string", "description": "directory to search (default: .)" });
     json!([
         tool(
@@ -133,6 +136,12 @@ fn tools() -> Value {
             "Inline a function at its call sites (safe subset)",
             json!({ "file": file, "name": name }),
             &["file", "name"]
+        ),
+        tool(
+            "docstring",
+            "Set or replace a function-like definition's docstring (defun/defsubst/defmacro/cl-*/Scheme define); text is raw and escaped into a string literal",
+            json!({ "file": file, "name": name, "text": docstring_text }),
+            &["file", "name", "text"]
         ),
         tool(
             "rewrite",
@@ -261,6 +270,23 @@ fn run_tool(name: &str, args: &Value) -> Result<String, String> {
             Ok(format!(
                 "inlined {} call site(s): {name}  {}",
                 outcome.inlined, outcome.new_file_hash
+            ))
+        }
+        "docstring" => {
+            let file = arg(args, "file")?;
+            let name = arg(args, "name")?;
+            let text = arg(args, "text")?;
+            let dialect = dialect_for_path(Path::new(file));
+            let outcome =
+                crate::refactor::set_docstring_in_file(Path::new(file), name, text, dialect)
+                    .map_err(|e| e.to_string())?;
+            let verb = match outcome.action {
+                crate::refactor::DocstringAction::Inserted => "set",
+                crate::refactor::DocstringAction::Replaced => "replaced",
+            };
+            Ok(format!(
+                "{verb} docstring on {name}  {}",
+                outcome.new_file_hash
             ))
         }
         "rewrite" => {
