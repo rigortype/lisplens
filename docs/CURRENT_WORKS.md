@@ -106,9 +106,14 @@ lessons from the consumption, both now also in memory:
 - Light formatter follow-up: re-run the full eight-repo Clojure harness (this session
   re-ran only five — add clj-kondo/next.jdbc/jsonista) and confirm the fixed/Tonsky
   style still has only the documented `(#?(…) …)` reader-conditional-headed off-by-one.
-- Inline-comment alignment / comment-only-line indentation to match cljfmt/phel — a
-  lisplens-side job consuming `lispexp::lex()` (see feedback 0007). The last
-  cross-cutting formatter limitation.
+- ~~Inline-comment alignment / comment-only-line indentation to match cljfmt/phel.~~
+  **Done** (this session): the formatter now consumes `lex()` (`comment_only_lines`) so
+  the Clojure engine (Clojure/Phel/Fennel/Janet/Hy/LFE/ISLisp) leaves comment-only
+  lines where written, byte-exact vs `cljfmt`/`phel format`; the Emacs family keeps
+  Emacs's `;`/`;;`/`;;;` rule. Trailing-comment column *alignment* was deliberately
+  **declined** — no oracle (Emacs `indent-region`, cljfmt, phel) does it, so the prior
+  byte-preserving behaviour was already faithful. Feedback 0007 marked consumed. This
+  closes the last cross-cutting formatter fidelity gap.
 - The deferred/candidate items already listed at the bottom of this file (extract
   opt-ins, non-bundled-dialect native indenters, `calculate-lisp-indent` → lispexp-emacs).
 

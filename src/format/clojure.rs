@@ -1118,4 +1118,47 @@ y)";
        y)";
         assert_eq!(fmt_fixed(input), want, "\n{}", fmt_fixed(input));
     }
+
+    #[test]
+    fn clojure_leaves_comment_only_lines_where_written() {
+        // cljfmt never reindents a comment-only line (`;`/`;;`): it stays at its
+        // column while the code around it reindents. (Verified byte-exact vs
+        // `cljfmt fix` 0.16.4.)
+        let input = "\
+(defn f [x]
+      ;; comment at 6
+  (when x
+        ; single at 8
+(g x)))";
+        let want = "\
+(defn f [x]
+      ;; comment at 6
+  (when x
+        ; single at 8
+    (g x)))";
+        assert_eq!(fmt(input), want, "\n{}", fmt(input));
+    }
+
+    #[test]
+    fn clojure_trailing_comment_line_still_reindents_the_code() {
+        // A comment *after code* is not a comment-only line: the code reindents
+        // and the trailing comment rides along untouched.
+        let input = "(defn f [x]\n(g x) ; trailing\n)";
+        assert_eq!(fmt(input), "(defn f [x]\n  (g x) ; trailing\n  )");
+    }
+
+    #[test]
+    fn phel_and_janet_comment_only_lines_are_preserved() {
+        // Phel comments are `;`; Janet's are `#`. Both ride this engine, and both
+        // formatters (`phel format`, `spork/fmt`) leave comment lines as written —
+        // the lexer classifies each dialect's comment char, so both are preserved.
+        assert_eq!(
+            fmt_phel("(defn f [x]\n      ; at 6\n  (g x))"),
+            "(defn f [x]\n      ; at 6\n  (g x))"
+        );
+        assert_eq!(
+            fmt_d("(defn f [x]\n      # at 6\n  (g x))", Dialect::Janet),
+            "(defn f [x]\n      # at 6\n  (g x))"
+        );
+    }
 }
