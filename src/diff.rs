@@ -7,7 +7,7 @@
 //! Units are matched across the two versions by `(kind, name, dispatch?)` — plain
 //! definitions carry no Dispatch signature, method-like forms add theirs so two
 //! methods of one generic stay distinct. A matched pair is *changed* iff it is
-//! not [`struct_eq`](crate::sexpr::struct_eq) (formatting-modulo), so reindent- or
+//! not [`struct_eq`] (formatting-modulo), so reindent- or
 //! comment-only churn never registers. No rename detection: a rename surfaces as
 //! one removed + one added unit. Top-level non-definition forms (`require`,
 //! `provide`, …) have no stable name key and are not diffed individually — only a
@@ -30,7 +30,7 @@ pub enum UnitStatus {
     Added,
     /// Present only in the old version.
     Removed,
-    /// Present in both, but not [`struct_eq`](crate::sexpr::struct_eq).
+    /// Present in both, but not [`struct_eq`].
     Changed,
 }
 
