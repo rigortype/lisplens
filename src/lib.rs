@@ -18,6 +18,7 @@ pub mod patch;
 pub mod refactor;
 pub mod resolve;
 pub mod search;
+pub mod sexpr;
 pub mod structural;
 pub mod write;
 

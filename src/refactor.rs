@@ -14,6 +14,7 @@ use lispexp::{parse, Class, Datum, DatumKind, Options, Prefix, Walk};
 use crate::edit::{splice_tracked, Edit, SpliceError};
 use crate::format::{has_native_engine, reindent, Touched};
 use crate::hash::file_hash;
+use crate::sexpr::{opt_eq, struct_eq};
 use crate::write::{verify_and_write, WriteError};
 use crate::Dialect;
 
@@ -856,71 +857,6 @@ fn class_ok(class: MClass, d: &Datum) -> bool {
                     ..
                 }
         ),
-    }
-}
-
-/// Structural equality **modulo formatting** (ADR-0033): recursive `DatumKind`
-/// comparison ignoring `span`/`line` (so whitespace and comments do not matter),
-/// with leaf text compared literally and no sugar/number/case normalization.
-/// (Distinct from `Datum`'s derived `==`, which compares spans.)
-fn struct_eq(a: &Datum, b: &Datum) -> bool {
-    match (&a.kind, &b.kind) {
-        (DatumKind::Symbol(x), DatumKind::Symbol(y)) => x == y,
-        (DatumKind::Keyword(x), DatumKind::Keyword(y)) => x == y,
-        (DatumKind::Number(x), DatumKind::Number(y)) => x == y,
-        (DatumKind::Str(x), DatumKind::Str(y)) => x == y,
-        (DatumKind::Char(x), DatumKind::Char(y)) => x == y,
-        (DatumKind::Bool(x), DatumKind::Bool(y)) => x == y,
-        (DatumKind::LabelRef { id: x }, DatumKind::LabelRef { id: y }) => x == y,
-        (
-            DatumKind::List {
-                delim: da,
-                items: ia,
-                tail: ta,
-                ..
-            },
-            DatumKind::List {
-                delim: db,
-                items: ib,
-                tail: tb,
-                ..
-            },
-        ) => {
-            da == db
-                && ia.len() == ib.len()
-                && ia.iter().zip(ib).all(|(p, q)| struct_eq(p, q))
-                && opt_eq(ta.as_deref(), tb.as_deref())
-        }
-        (
-            DatumKind::Prefixed {
-                prefix: pa,
-                notation: na,
-                inner: inna,
-                arg: aa,
-            },
-            DatumKind::Prefixed {
-                prefix: pb,
-                notation: nb,
-                inner: innb,
-                arg: ab,
-            },
-        ) => pa == pb && na == nb && struct_eq(inna, innb) && opt_eq(aa.as_deref(), ab.as_deref()),
-        (
-            DatumKind::HashLiteral { tag: ta, inner: ia },
-            DatumKind::HashLiteral { tag: tb, inner: ib },
-        ) => ta == tb && opt_eq(ia.as_deref(), ib.as_deref()),
-        (DatumKind::Label { id: xa, inner: ia }, DatumKind::Label { id: xb, inner: ib }) => {
-            xa == xb && struct_eq(ia, ib)
-        }
-        _ => false,
-    }
-}
-
-fn opt_eq(a: Option<&Datum>, b: Option<&Datum>) -> bool {
-    match (a, b) {
-        (None, None) => true,
-        (Some(x), Some(y)) => struct_eq(x, y),
-        _ => false,
     }
 }
 
