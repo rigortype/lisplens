@@ -40,9 +40,16 @@ echoed to stdout — a safe no-op for a stdin→stdout filter — with a stderr
 diagnostic and a non-zero exit. In `--json` mode the exit is always 0 and
 `success` carries the outcome.
 
-**Cursor** is position-tracking only: an input cursor is reported at its
-post-transform position. No cursor-protection semantics (those belong to the
-future interactive layer).
+**Cursor** is position-tracking: an input cursor is reported at its
+post-transform position. Indent mode additionally applies **minimal cursor-line
+protection** (#31, added for the live editor): the paren trail on the cursor's
+line is kept verbatim (locked, not stripped or re-inferred) so live editing can't
+collapse the trail out from under the caret. It is *not* full smart mode — no
+`changes` tracking, still a stateless whole-buffer transform. If protecting the
+cursor line would prevent a balanced result, the protection **yields**: the
+transform is retried without it, so the balance-generating guarantee below always
+wins. (Full parinfer cursor semantics — leading-close-paren handling, per-command
+smart-mode classification — remain out of scope.)
 
 ## Modes
 
@@ -105,9 +112,11 @@ accepted
   *interpretation* — `display_col` subtracts `Nameless::saving` for composed
   prefixes earlier on the line, collected from the `Atom` tokens in the `lex()`
   scan, so indentation and open-paren columns are read in displayed columns.
+- Indent mode has **minimal cursor-line protection** (#31): the cursor line's
+  paren trail is locked so live editing can't collapse it, yielding to the balance
+  guarantee when it must (see Cursor above). Fuller parinfer cursor semantics
+  (leading-close-paren handling, smart-mode command classification) stay parked.
 - Documented indent-mode limitations (parked, not blockers): comment-only lines
   make no indentation decision (a closer is never placed on a comment line); a
   line whose *start* is inside a multi-line string/comment is emitted verbatim, so
-  code after a `|#` block-comment close on that line is not re-scanned; full
-  parinfer cursor-protection and leading-close-paren handling are out of scope
-  (cursor is position-tracking only, ADR-0045).
+  code after a `|#` block-comment close on that line is not re-scanned.

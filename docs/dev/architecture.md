@@ -24,7 +24,7 @@ content-hash **anchor** for any target, and edit by anchor.
 | `search` | `find_definitions` / `find_symbol` (code-vs-data via lispexp `walk`) + text renderers (ADR-0010) |
 | `config` | resolve `indent-tabs-mode`/`tab-width` from file-local/dir-locals/EditorConfig (ADR-0029); file-local + dir-local *parsing* delegated to `lispexp_emacs::{local_vars,dir_locals}` (lispexp ADR-0033), EditorConfig stays in-tree |
 | `format` | native Lisp indenter, dialect-dispatched: shared driver + an `Engine` per bundled Emacs indenter (Emacs Lisp `lisp-indent-function`; Common Lisp `common-lisp-indent-function` in `format/commonlisp.rs`; Scheme family `scheme-indent-function` in `format/scheme.rs`; generic fallback for the rest) — see `formatter.md`; Emacs Lisp bundled table from `lispexp_emacs::indent::bundled_table` (ADR-0011/0025-0028/**0031**; crate split lispexp ADR-0033) |
-| `parinfer` | native parinfer-style whole-buffer transform (ADR-0045): `run(Request)->Answer`, stateless, stdin→stdout. Paren mode = balance-checked faithful reindent (reuses `format`); Indent mode = infer close-parens from indentation over a tolerant `lex()` token scan (own `col_at`/`display_col` columns; Nameless-aware — reads *displayed* columns via `Nameless::saving`, ADR-0030/#26). balance-*generating* safety (success=clean, failure=input unchanged + diagnostic) |
+| `parinfer` | native parinfer-style whole-buffer transform (ADR-0045): `run(Request)->Answer`, stateless, stdin→stdout. Paren mode = balance-checked faithful reindent (reuses `format`); Indent mode = infer close-parens from indentation over a tolerant `lex()` token scan (own `col_at`/`display_col` columns; Nameless-aware via `Nameless::saving`, ADR-0030; minimal cursor-line trail protection, #31). balance-*generating* safety. `run_json`/`run_json_line` drive the MCP tool and the persistent `parinfer --server` (line-delimited JSON, ADR-0046) |
 | `mcp` | minimal stdio JSON-RPC MCP server (ADR-0020) |
 | `lib` | Lens: `outline`/`expand` (+ `_text`), `dialect_for_path`/`recognized_dialect`, `disappeared_definitions`; re-exports `Dialect` |
 | `main` | CLI dispatch |
@@ -41,6 +41,7 @@ find <name> [dir]           definitions by name
 refs <name> [dir]           symbol occurrences (code/data tagged)
 format <file>               reindent a Lisp file (native, by dialect; honors config)
 parinfer <mode>             parinfer-style transform, stdin→stdout (paren/indent; ADR-0045)
+parinfer --server           persistent line-delimited JSON server for editors (ADR-0046)
 check  <file>               parse-check (diagnostics; non-zero exit on errors, ADR-0032)
 rename <old> <new> <file>   rename a symbol across a file (symbol-exact, safe, ADR-0032)
 inline <name> <file>        inline a function at its call sites (safe subset, ADR-0032)

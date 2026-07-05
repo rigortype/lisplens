@@ -261,49 +261,10 @@ fn run_tool(name: &str, args: &Value) -> Result<String, String> {
                 crate::diagnostics_text(file, &diagnostics)
             })
         }
-        "parinfer" => {
-            let mode_name = arg(args, "mode")?;
-            let mode = crate::parinfer::Mode::from_name(mode_name)
-                .ok_or_else(|| format!("unknown mode `{mode_name}` (expected: paren, indent)"))?;
-            let text = arg(args, "text")?.to_string();
-            let dialect = match args.get("dialect").and_then(Value::as_str) {
-                Some(d) => d
-                    .parse::<crate::Dialect>()
-                    .map_err(|_| format!("unknown dialect `{d}`"))?,
-                None => crate::Dialect::EmacsLisp,
-            };
-            let nameless_on = args
-                .get("nameless")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            let name_hint = args.get("name").and_then(Value::as_str);
-            let cursor = match (
-                args.get("cursorLine").and_then(Value::as_u64),
-                args.get("cursorX").and_then(Value::as_u64),
-            ) {
-                (Some(line), Some(x)) => Some(crate::parinfer::Cursor {
-                    line: line as usize,
-                    x: x as usize,
-                }),
-                _ => None,
-            };
-            let mut config = crate::config::FormatConfig::default();
-            config.nameless |= nameless_on;
-            let nameless = if config.nameless && dialect == crate::Dialect::EmacsLisp {
-                Some(crate::nameless::Nameless::for_file(name_hint.unwrap_or("")))
-            } else {
-                None
-            };
-            let answer = crate::parinfer::run(&crate::parinfer::Request {
-                mode,
-                text: &text,
-                dialect,
-                config,
-                nameless,
-                cursor,
-            });
-            Ok(crate::parinfer::answer_to_json(&answer).to_string())
-        }
+        // Shares the request shape and engine with `parinfer --server` via
+        // `run_json` — `{mode, text, dialect?, nameless?, name?, cursor*}` in, the
+        // `{text, success, error, cursor*}` answer out (bad input → success:false).
+        "parinfer" => Ok(crate::parinfer::run_json(args).to_string()),
         "rename" => {
             let file = arg(args, "file")?;
             let from = arg(args, "from")?;
