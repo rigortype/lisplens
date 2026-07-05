@@ -131,10 +131,53 @@ parity — the ergonomic win ADR-0032 predicted, now measured. The skill will ne
 one more pass once the primitive-equipped binary is the *published* release (the
 crates.io/installed default), so downstream users get the same surface.
 
+## Update 2 — the three shapes are now first-class primitives (PRs #17–#21)
+
+The plan the report set out (surface the existing refactors, add the missing
+docstring op, close the "edit inside a form" gap) was carried out as a short
+sequence of PRs. Intent → what shipped:
+
+| PR | Intent | Result |
+| --- | --- | --- |
+| #17 | Ship the skill in-repo; stop pointing users at ADRs; make `--help` usable | `skills/lisplens/` (vercel-labs/skills-installable); README/`--help` ADR links removed; `--help`/`-h` → stdout, exit 0 |
+| #18 | The missing **docstring** primitive | `lisplens docstring <name> <file>` (text on stdin, escaped), function-like defs (ADR-0044) |
+| #19 | Mirror it into MCP (ADR-0032 says CLI verbs mirror) | `docstring` MCP tool; stale tool-surface comment refreshed |
+| #20 | Docstring **v2 — Elisp variables** | `defvar`/`defconst`/`defcustom`/… (docstring after the value); valueless/Scheme-value refused |
+| #21 | Close the **insert-into-form** gap (the `insert-*` `BadOp`) | structural `insert-after`/`insert-before` on any node incl. inner ones; reindented, parse-checked |
+
+Net: all three universal shapes — file-wide rename, add-docstring (function *and*
+variable), and inserting a form inside another — now have a first-class,
+self-verifying command or verb. `rename`/`inline`/`extract`/`check` already
+existed (ADR-0032); this arc added `docstring` and structural `insert-*`.
+
+**Iteration-7 — validation that the skill drives the new primitives.** Three
+`cc-engine.el` tasks (symbol-rename trap, function docstring, `defvar`
+docstring), with-skill vs no-skill baseline, on the primitive-equipped binary:
+
+- **100% both configs**, all outputs re-verified (rename 26/0, siblings 14·12·10;
+  docstrings placed and parsing; neighbours untouched).
+- With-skill reached for the primitives unprompted: `lisplens rename` (one
+  command for the trap, vs the baseline's hand-built `perl (?![-\w])` lookahead),
+  and `lisplens docstring` for both the function and the `defvar` (v2). So the
+  skill genuinely routes agents onto the atomic path.
+- Tokens/time stay higher with-skill (primitives + a verification step) at
+  correctness parity — consistent with the whole series' finding: *the value is
+  the safe, one-shot, self-verifying path, not token economy.*
+
+**One friction, now documented.** On the function-docstring task the with-skill
+agent's docstring text contained a backtick + apostrophe (`` `c-macro-start' ``),
+which its **shell** mangled in `printf '…' | lisplens docstring …` — truncating
+the text before it reached lisplens (lisplens's own escaping was fine). It caught
+this on read-back and recovered by feeding the text via a file on stdin. The
+skill now tells agents to pass docstring/heredoc text through a quoted heredoc or
+a file when it contains backticks or quotes, so the shell can't corrupt it.
+
 ## Caveats
 
-- Iteration-5 is 1 run per (eval, config) — a regression *smoke test*, not new
-  statistics. It reuses iteration-3's fixtures and ground truth.
-- The installed binary (`~/local/bin/lisplens`, 7 commands) predates the repo's
-  `rename`/`inline`/`extract`/`check`; the skill is intentionally written to that
-  older surface. Recommendation #1 above closes that gap.
+- Iteration-5/6/7 are 1 run per (eval, config) — regression/validation *smoke
+  tests*, not new statistics. They reuse iteration-3's fixtures and ground truth.
+- The locally-installed binary was rebuilt from `master` after each merge, so it
+  carries the new primitives; the remaining gap is the **published crates.io
+  release** — until that ships, a fresh `cargo install lisplens` won't have
+  `rename`/`docstring`/structural `insert-*`, and the skill's primitive guidance
+  would outrun the binary. Cutting that release is the open follow-up.

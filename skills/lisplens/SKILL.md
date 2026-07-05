@@ -61,7 +61,10 @@ so you skip the `refs` → `line edit` batch → `refs` re-verify assembly:
   text is read from stdin (raw — lisplens escapes and quotes it). Covers
   function-like defs (defun/defsubst/defmacro/cl-*, Scheme `(define (name …))`)
   and Elisp variable defs (defvar/defconst/defcustom/…, docstring after the
-  value).
+  value). Docstrings often contain backticks and apostrophes (`` `foo' ``); feed
+  the text via a quoted heredoc or a file (`lisplens docstring x f.el < ds.txt`),
+  not an interpolated `printf '…' | …`, so your shell can't mangle it before it
+  reaches lisplens.
 - `lisplens rewrite <file>` — structural pattern→template rewrite (spec on
   stdin): exact s-expr matching, parse-safe, but *not* behaviour-preserving (a
   "structural sed" — you assert the semantics).
