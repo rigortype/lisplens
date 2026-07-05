@@ -103,9 +103,18 @@ lessons from the consumption, both now also in memory:
   in an `if` body). Keep it a parse-flag only.
 
 **Candidate next work (nothing is blocking; pick by interest):**
-- Light formatter follow-up: re-run the full eight-repo Clojure harness (this session
-  re-ran only five — add clj-kondo/next.jdbc/jsonista) and confirm the fixed/Tonsky
-  style still has only the documented `(#?(…) …)` reader-conditional-headed off-by-one.
+- ~~Light formatter follow-up: re-run the Clojure harness on the missing repos.~~
+  **Done** (this session): re-ran `lisplens format` vs `cljfmt fix` (indentation +
+  trailing-whitespace config, `--no-read-clj-config-files`) on **jsonista + reitit**
+  (178/178 byte-exact) and **next-jdbc + clj-kondo/src** (67/71). The 4 residuals are
+  all known/out-of-scope: **3 are the `#_`-discard-indentation limitation**
+  (specifically `#_` on its *own line* before a form, and `#_#_` double-discards —
+  feedback 0003; keep_discarded handles the inline case but not these), and **1 is a
+  trailing space on a *code* line** (lisplens is leading-whitespace-only by the safety
+  invariant; cljfmt's trailing-whitespace removal is a separate transform, out of
+  scope). **Zero comment-line divergences** across all 249 files (validates the
+  comment-preservation fix on real corpora) and **zero new indentation bugs**. The only
+  remaining Clojure residual worth a future look is the `#_`-on-own-line / `#_#_` case.
 - ~~Inline-comment alignment / comment-only-line indentation to match cljfmt/phel.~~
   **Done** (this session): the formatter now consumes `lex()` (`comment_only_lines`) so
   the Clojure engine (Clojure/Phel/Fennel/Janet/Hy/LFE/ISLisp) leaves comment-only
@@ -549,17 +558,23 @@ parked. In rough priority for whenever it is picked up again:
 2. **More real-world elisp validation.** Header/footer and tab-mode files;
    config resolution end-to-end on real repos. Easy to start, open-ended; run the
    harness on new corpora when convenient.
-3. **Single `;` inline (not own-line) comment alignment** — the own-line case is
-   done; inline comments would need the `lex` trivia layer (lispexp-feedback/0002).
-4. **Racket infix dot** `(a . op . b)` (two dots in one list) — the continuation
-   is off; a niche reader construct, engine-agnostic. (The other cross-cutting
-   gap, byte- vs display-column measurement, is now **fixed** — see the
-   display-width bullet above.)
-5. **Native indenters for the remaining non-bundled dialects** (Fennel/Janet/Hy/
-   LFE/…), which currently ride the generic Emacs Lisp fallback. Emacs bundles no
-   oracle for them, so each needs its own reference + spec (a separate,
-   design-first effort per family). **Clojure is now done** (ADR-0039, cljfmt
-   oracle). Not required for the Emacs-bundled scope.
+3. ~~**Single `;` inline (not own-line) comment alignment.**~~ **Resolved (declined).**
+   The oracles settled it: Emacs `indent-region`, `cljfmt`, and `phel format` all
+   leave a *trailing* comment untouched, so lisplens's byte-preserving behaviour there
+   is already faithful — aligning it would be un-faithful *and* break the
+   leading-whitespace-only invariant. The comment-*only*-line work is done (Clojure
+   engine preserves them; feedback 0007 consumed).
+4. **Racket infix dot** `(a . op . b)` (two dots in one list) — the continuation is
+   off by 2 columns vs Emacs `scheme-mode` (verified; Emacs aligns the continuation
+   under the *first* dot). Niche: lispexp reads a second dot as `ItemAfterDottedTail`
+   (a Racket-only construct), and cleanly distinguishing infix (2+ dots) from a proper
+   dotted tail (1 dot) needs a multi-dot signal `dot_span` doesn't give. Low value,
+   fiddly; parked. (The other cross-cutting gap, byte- vs display-column measurement,
+   is **fixed** — see the display-width bullet above.)
+5. ~~**Native indenters for the remaining non-bundled dialects.**~~ **Done.** Fennel,
+   Janet, Hy, LFE all have native engines (ADR-0043, corpus-induced), plus Clojure
+   (ADR-0039) and Phel (ADR-0041) and the opt-in ISLisp/EISL style (ADR-0042). Only
+   EDN data rides the generic fallback now.
 6. **MCP edit JSON op-array** (ADR-0019) and **S-expr structural addresses**
    (ADR-0018 defers these). Each is its own design-first chunk on a separate
    surface.
