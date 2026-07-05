@@ -95,6 +95,7 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        ["--help"] | ["-h"] | ["help"] => help(),
         _ => usage(),
     }
 }
@@ -474,37 +475,37 @@ fn run_refs(name: &str, dir: &str) -> ExitCode {
     }
 }
 
+const USAGE: &str = "\
+usage:
+  lisplens struct read <file> [name]   Outline, or expand a definition by name
+  lisplens line read <file>     line-hash read ([path#hash] + N:hash|content)
+  lisplens line edit <file>     apply a Line-hash patch from stdin
+  lisplens struct edit <file>   apply a Structural patch from stdin
+  lisplens find <name> [dir]    find definitions by name (default dir: .)
+  lisplens refs <name> [dir]    find symbol occurrences (code/data tagged)
+  lisplens format [--nameless] [--tonsky] <file>  reindent a Lisp file (native, by dialect; --tonsky = Clojure fixed style)
+  lisplens check <file>         parse-check a Lisp file (diagnostics; non-zero on errors)
+  lisplens rename <old> <new> <file>   rename a symbol across a file (symbol-exact, safe)
+  lisplens inline <name> <file>        inline a function at its call sites (safe subset)
+  lisplens rewrite <file>       structural pattern->template rewrite (spec on stdin)
+  lisplens extract <file> <anchor> <name> [param...] [--count N] [--kind HEAD] [--all] [--also ANCHOR]  pull a form (or a run of N) into a new function
+  lisplens mcp                  run the MCP server over stdio
+
+  --dialect NAME   force the dialect for a single-file command (kebab-case,
+                   e.g. islisp / common-lisp / clojure) instead of guessing
+                   from the extension — useful for ambiguous ones like .lsp
+
+Patch DSL, examples, and MCP setup: https://github.com/rigortype/lisplens";
+
+/// Explicit help request (`--help`/`-h`/`help`): usage to stdout, success exit.
+fn help() -> ExitCode {
+    println!("{USAGE}");
+    ExitCode::SUCCESS
+}
+
+/// Misuse (unknown/absent command): usage to stderr, failure exit.
 fn usage() -> ExitCode {
-    eprintln!("usage:");
-    eprintln!("  lisplens struct read <file> [name]   Outline, or expand a definition by name");
-    eprintln!("  lisplens line read <file>     line-hash read ([path#hash] + N:hash|content)");
-    eprintln!("  lisplens line edit <file>     apply a Line-hash patch from stdin");
-    eprintln!("  lisplens struct edit <file>   apply a Structural patch from stdin");
-    eprintln!("  lisplens find <name> [dir]    find definitions by name (default dir: .)");
-    eprintln!("  lisplens refs <name> [dir]    find symbol occurrences (code/data tagged)");
-    eprintln!("  lisplens format [--nameless] [--tonsky] <file>  reindent a Lisp file (native, by dialect; --tonsky = Clojure fixed style)");
-    eprintln!(
-        "  lisplens check <file>         parse-check a Lisp file (diagnostics; non-zero on errors)"
-    );
-    eprintln!(
-        "  lisplens rename <old> <new> <file>   rename a symbol across a file (symbol-exact, safe)"
-    );
-    eprintln!(
-        "  lisplens inline <name> <file>        inline a function at its call sites (safe subset)"
-    );
-    eprintln!(
-        "  lisplens rewrite <file>       structural pattern->template rewrite (spec on stdin)"
-    );
-    eprintln!(
-        "  lisplens extract <file> <anchor> <name> [param...] [--count N] [--kind HEAD] [--all] [--also ANCHOR]  pull a form (or a run of N) into a new function"
-    );
-    eprintln!("  lisplens mcp                  run the MCP server over stdio");
-    eprintln!();
-    eprintln!("  --dialect NAME   force the dialect for a single-file command (kebab-case,");
-    eprintln!("                   e.g. islisp / common-lisp / clojure) instead of guessing");
-    eprintln!("                   from the extension — useful for ambiguous ones like .lsp");
-    eprintln!();
-    eprintln!("Patch DSL, examples, and MCP setup: https://github.com/rigortype/lisplens");
+    eprintln!("{USAGE}");
     ExitCode::FAILURE
 }
 
