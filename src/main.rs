@@ -145,24 +145,39 @@ fn run_line_read(path: PathBuf) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// `diff <old> <new> [--json]` — Structural diff at definition granularity
-/// (ADR-0047). Exit code is 0 whether or not there are differences; non-zero is
-/// reserved for real errors (missing file, etc.).
+/// `diff <old> <new> [--json] [--deep | --unit NAME]` — Structural diff. Without
+/// `--deep`/`--unit` it is the definition-level attention map (ADR-0047); with
+/// them it drills the changed definitions' internals (ADR-0048). Exit code is 0
+/// whether or not there are differences; non-zero is reserved for real errors.
 fn run_diff(args: &[&str]) -> ExitCode {
     let mut json = false;
+    let mut deep = false;
+    let mut unit: Option<&str> = None;
     let mut files: Vec<&str> = Vec::new();
-    for arg in args {
-        match *arg {
+    let mut i = 0;
+    while i < args.len() {
+        match args[i] {
             "--json" => json = true,
+            "--deep" => deep = true,
+            "--unit" => {
+                let Some(name) = args.get(i + 1) else {
+                    eprintln!("lisplens: diff: --unit needs a value");
+                    return ExitCode::FAILURE;
+                };
+                unit = Some(name);
+                i += 1;
+            }
+            flag if flag.starts_with("--unit=") => unit = Some(&flag["--unit=".len()..]),
             flag if flag.starts_with('-') => {
                 eprintln!("lisplens: diff: unknown flag `{flag}`");
                 return ExitCode::FAILURE;
             }
             file => files.push(file),
         }
+        i += 1;
     }
     let [old, new] = files.as_slice() else {
-        eprintln!("lisplens: usage: diff <old> <new> [--json]");
+        eprintln!("lisplens: usage: diff <old> <new> [--json] [--deep | --unit NAME]");
         return ExitCode::FAILURE;
     };
     let old_src = match std::fs::read_to_string(old) {
@@ -180,11 +195,20 @@ fn run_diff(args: &[&str]) -> ExitCode {
         }
     };
     let dialect = resolve_dialect(Path::new(new));
-    let diff = lisplens::diff::diff_files(&old_src, &new_src, dialect);
-    if json {
-        println!("{}", lisplens::diff::diff_json(&diff));
+    if deep || unit.is_some() {
+        let deep = lisplens::diff::diff_files_deep(&old_src, &new_src, dialect, unit);
+        if json {
+            println!("{}", lisplens::diff::deep_json(&deep));
+        } else {
+            print!("{}", lisplens::diff::deep_text(&deep));
+        }
     } else {
-        print!("{}", lisplens::diff::diff_text(&diff));
+        let diff = lisplens::diff::diff_files(&old_src, &new_src, dialect);
+        if json {
+            println!("{}", lisplens::diff::diff_json(&diff));
+        } else {
+            print!("{}", lisplens::diff::diff_text(&diff));
+        }
     }
     ExitCode::SUCCESS
 }
@@ -738,7 +762,7 @@ usage:
   lisplens parinfer <paren|indent> [--json] [--nameless] [--name N|--file P] [--cursor-line N --cursor-x M]  parinfer-style transform of stdin->stdout (ADR-0045)
   lisplens parinfer --server    persistent line-delimited JSON parinfer server for editors (ADR-0046)
   lisplens check <file>         parse-check a Lisp file (diagnostics; non-zero on errors)
-  lisplens diff <old> <new> [--json]   structural diff of two versions by definition (ADR-0047)
+  lisplens diff <old> <new> [--json] [--deep|--unit NAME]   structural diff: definition map (ADR-0047), or drill a changed def's internals (--deep/--unit, ADR-0048)
   lisplens rename <old> <new> <file>   rename a symbol across a file (symbol-exact, safe)
   lisplens inline <name> <file>        inline a function at its call sites (safe subset)
   lisplens docstring <name> <file>     set/replace a function-like def's docstring (text on stdin)

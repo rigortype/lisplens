@@ -16,10 +16,10 @@
 use std::collections::HashMap;
 
 use lispexp::annotate::{annotate_tree, bundled_registry, Role};
-use lispexp::{parse, Datum, Options};
+use lispexp::{parse, Datum, DatumKind, Options};
 
 use crate::hash::anchor_hash;
-use crate::sexpr::struct_eq;
+use crate::sexpr::{opt_eq, struct_eq};
 use crate::{dispatch_signature, name_text, span_bytes, Dialect};
 
 /// How a definition unit differs between the two versions. `Unchanged` units are
@@ -155,19 +155,23 @@ fn bucket_by_key<'u, 'a>(units: &'u [Unit<'a>]) -> HashMap<&'u Key, Vec<&'u Unit
     map
 }
 
-/// Compare two versions of a source at definition granularity (ADR-0047).
-pub fn diff_files(old: &str, new: &str, dialect: Dialect) -> FileDiff {
-    let old_parsed = parse(old, &Options::for_dialect(dialect));
-    let new_parsed = parse(new, &Options::for_dialect(dialect));
-    let (old_units, old_others) = collect_units(old, &old_parsed.data, dialect);
-    let (new_units, new_others) = collect_units(new, &new_parsed.data, dialect);
+/// The matched result of two unit lists: changed pairs (`old`, `new`) plus the
+/// units present on only one side.
+struct Matched<'u, 'a> {
+    changed: Vec<(&'u Unit<'a>, &'u Unit<'a>)>,
+    added: Vec<&'u Unit<'a>>,
+    removed: Vec<&'u Unit<'a>>,
+}
 
-    // Bucket units by key, preserving source order. A key can repeat within one
-    // file — e.g. Emacs's `(defvar x)` forward declaration plus its later
-    // `(defvar x nil)` — so each key maps to a *list*; matching a single instance
-    // per key would mispair the duplicates and falsely report a change.
-    let old_by_key = bucket_by_key(&old_units);
-    let new_by_key = bucket_by_key(&new_units);
+/// Match two unit lists by key (ADR-0047). A key can repeat within one file —
+/// e.g. Emacs's `(defvar x)` forward declaration plus its later `(defvar x nil)`
+/// — so each key maps to a *list*; within a key, exact `struct_eq` instances are
+/// consumed first (unchanged), the remainder paired positionally (changed), and
+/// the leftover tail is added/removed. Matching a single instance per key would
+/// mispair the duplicates and falsely report a change.
+fn match_units<'u, 'a>(old_units: &'u [Unit<'a>], new_units: &'u [Unit<'a>]) -> Matched<'u, 'a> {
+    let old_by_key = bucket_by_key(old_units);
+    let new_by_key = bucket_by_key(new_units);
     let mut keys: Vec<&Key> = old_by_key
         .keys()
         .chain(new_by_key.keys())
@@ -176,25 +180,27 @@ pub fn diff_files(old: &str, new: &str, dialect: Dialect) -> FileDiff {
     keys.sort_unstable();
     keys.dedup();
 
-    let mut units = Vec::new();
+    let mut matched = Matched {
+        changed: Vec::new(),
+        added: Vec::new(),
+        removed: Vec::new(),
+    };
     let empty: Vec<&Unit> = Vec::new();
     for key in keys {
         let olds = old_by_key.get(key).unwrap_or(&empty);
         let news = new_by_key.get(key).unwrap_or(&empty);
-        // Consume exact (struct_eq) pairs first — these are unchanged, so an
-        // untouched duplicate stays untouched regardless of order.
         let mut new_used = vec![false; news.len()];
         let mut old_unmatched: Vec<&Unit> = Vec::new();
         for ou in olds {
-            let mut matched = false;
+            let mut hit = false;
             for (j, nu) in news.iter().enumerate() {
                 if !new_used[j] && struct_eq(ou.form, nu.form) {
                     new_used[j] = true;
-                    matched = true;
+                    hit = true;
                     break;
                 }
             }
-            if !matched {
+            if !hit {
                 old_unmatched.push(ou);
             }
         }
@@ -204,18 +210,33 @@ pub fn diff_files(old: &str, new: &str, dialect: Dialect) -> FileDiff {
             .filter(|(j, _)| !new_used[*j])
             .map(|(_, nu)| *nu)
             .collect();
-        // The remainder: pair positionally as Changed, the leftover tail as
-        // Removed / Added.
         let common = old_unmatched.len().min(new_unmatched.len());
-        for nu in &new_unmatched[..common] {
-            units.push(unit_diff(nu, UnitStatus::Changed));
+        for k in 0..common {
+            matched.changed.push((old_unmatched[k], new_unmatched[k]));
         }
-        for ou in &old_unmatched[common..] {
-            units.push(unit_diff(ou, UnitStatus::Removed));
-        }
-        for nu in &new_unmatched[common..] {
-            units.push(unit_diff(nu, UnitStatus::Added));
-        }
+        matched.removed.extend_from_slice(&old_unmatched[common..]);
+        matched.added.extend_from_slice(&new_unmatched[common..]);
+    }
+    matched
+}
+
+/// Compare two versions of a source at definition granularity (ADR-0047).
+pub fn diff_files(old: &str, new: &str, dialect: Dialect) -> FileDiff {
+    let old_parsed = parse(old, &Options::for_dialect(dialect));
+    let new_parsed = parse(new, &Options::for_dialect(dialect));
+    let (old_units, old_others) = collect_units(old, &old_parsed.data, dialect);
+    let (new_units, new_others) = collect_units(new, &new_parsed.data, dialect);
+
+    let matched = match_units(&old_units, &new_units);
+    let mut units = Vec::new();
+    for (_, nu) in &matched.changed {
+        units.push(unit_diff(nu, UnitStatus::Changed));
+    }
+    for nu in &matched.added {
+        units.push(unit_diff(nu, UnitStatus::Added));
+    }
+    for ou in &matched.removed {
+        units.push(unit_diff(ou, UnitStatus::Removed));
     }
 
     let other_forms_changed = old_others.len() != new_others.len()
@@ -302,6 +323,444 @@ pub fn diff_json(diff: &FileDiff) -> serde_json::Value {
     })
 }
 
+// ===========================================================================
+// Tree diff within a unit (ADR-0048)
+// ===========================================================================
+
+/// A short, one-line source fragment of a form plus its editing anchor — what a
+/// `Replace`/`Added`/`Removed` node carries for display and for jumping to an edit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Frag {
+    /// A one-line, whitespace-collapsed, truncated preview of the verbatim form.
+    pub text: String,
+    /// 1-based start line of the form.
+    pub line: u32,
+    /// 4-hex anchor hash over the form's full span (ADR-0008).
+    pub hash: String,
+}
+
+/// How two aligned forms differ (ADR-0048). `Descend` recursed into a same-shape
+/// container (same-delimiter list, or same-notation prefix); `Replace` is an
+/// opaque leaf/category change carrying both sides.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FormDiff {
+    /// Recursed into a container: its changed child positions (unchanged children
+    /// are omitted; `child_count` is the new side's total so a renderer can show
+    /// elision).
+    Descend {
+        /// A short label for the container — its head symbol (or a delimiter hint).
+        label: String,
+        /// Total number of children on the new side.
+        child_count: usize,
+        /// The changed children, in new-side order.
+        children: Vec<ChildDiff>,
+    },
+    /// Not the same category (differing leaves, list↔atom, delimiter or notation
+    /// mismatch): the whole form is replaced.
+    Replace {
+        /// The old form.
+        old: Frag,
+        /// The new form.
+        new: Frag,
+    },
+}
+
+/// One changed child within a [`FormDiff::Descend`] (ADR-0048's four statuses at
+/// the child level; unchanged children are not emitted). `index` is the child's
+/// position on its own side, so a renderer can place it and infer elision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChildDiff {
+    /// A child present only in the new version.
+    Added { index: usize, frag: Frag },
+    /// A child present only in the old version.
+    Removed { index: usize, frag: Frag },
+    /// A child present in both but differing — recursed.
+    Paired { index: usize, diff: FormDiff },
+}
+
+/// Verbatim source of `d`'s span.
+fn slice<'a>(src: &'a str, d: &Datum) -> &'a str {
+    &src[d.span.start as usize..d.span.end as usize]
+}
+
+/// One-line, whitespace-collapsed, truncated preview.
+fn one_line(text: &str) -> String {
+    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut chars = collapsed.chars();
+    let head: String = chars.by_ref().take(60).collect();
+    if chars.next().is_some() {
+        format!("{head}…")
+    } else {
+        head
+    }
+}
+
+fn frag(d: &Datum, src: &str) -> Frag {
+    Frag {
+        text: one_line(slice(src, d)),
+        line: d.line,
+        hash: anchor_hash(span_bytes(src, d)),
+    }
+}
+
+/// A container's short label: its head symbol if it has one, else a delimiter hint.
+fn container_label(kind: &DatumKind) -> String {
+    match kind {
+        DatumKind::List { items, .. } => match items.first().map(|d| &d.kind) {
+            Some(DatumKind::Symbol(s)) => s.to_string(),
+            _ => "(…)".to_string(),
+        },
+        DatumKind::Prefixed { .. } => "prefix".to_string(),
+        _ => "…".to_string(),
+    }
+}
+
+/// Structural diff of two forms (ADR-0048). `None` when they are [`struct_eq`] —
+/// i.e. there is no change modulo formatting.
+pub fn diff_forms(old: &Datum, new: &Datum, old_src: &str, new_src: &str) -> Option<FormDiff> {
+    if struct_eq(old, new) {
+        return None;
+    }
+    Some(diff_forms_inner(old, new, old_src, new_src))
+}
+
+fn diff_forms_inner(old: &Datum, new: &Datum, os: &str, ns: &str) -> FormDiff {
+    match (&old.kind, &new.kind) {
+        // Same-delimiter list with equal dotted tails → recurse over children.
+        (
+            DatumKind::List {
+                delim: da,
+                items: ia,
+                tail: ta,
+                ..
+            },
+            DatumKind::List {
+                delim: db,
+                items: ib,
+                tail: tb,
+                ..
+            },
+        ) if da == db && opt_eq(ta.as_deref(), tb.as_deref()) => FormDiff::Descend {
+            label: container_label(&new.kind),
+            child_count: ib.len(),
+            children: align_children(ia, ib, os, ns),
+        },
+        // Same-notation prefix with an equal auxiliary arg → recurse into the inner.
+        (
+            DatumKind::Prefixed {
+                notation: na,
+                inner: ina,
+                arg: aa,
+                ..
+            },
+            DatumKind::Prefixed {
+                notation: nb,
+                inner: inb,
+                arg: ab,
+                ..
+            },
+        ) if na == nb && opt_eq(aa.as_deref(), ab.as_deref()) => {
+            // The inner must differ (the whole form is not `struct_eq`).
+            let children = diff_forms(ina, inb, os, ns)
+                .map(|d| vec![ChildDiff::Paired { index: 0, diff: d }])
+                .unwrap_or_default();
+            FormDiff::Descend {
+                label: container_label(&new.kind),
+                child_count: 1,
+                children,
+            }
+        }
+        // Everything else: an opaque replace carrying both sides.
+        _ => FormDiff::Replace {
+            old: frag(old, os),
+            new: frag(new, ns),
+        },
+    }
+}
+
+/// The struct_eq LCS of two child sequences as `(old_index, new_index)` anchor
+/// pairs, increasing on both axes — the unchanged children the alignment pins.
+fn lcs_matches(a: &[Datum], b: &[Datum]) -> Vec<(usize, usize)> {
+    let (m, n) = (a.len(), b.len());
+    let mut dp = vec![vec![0u32; n + 1]; m + 1];
+    for i in (0..m).rev() {
+        for j in (0..n).rev() {
+            dp[i][j] = if struct_eq(&a[i], &b[j]) {
+                dp[i + 1][j + 1] + 1
+            } else {
+                dp[i + 1][j].max(dp[i][j + 1])
+            };
+        }
+    }
+    let (mut i, mut j) = (0, 0);
+    let mut out = Vec::new();
+    while i < m && j < n {
+        if struct_eq(&a[i], &b[j]) {
+            out.push((i, j));
+            i += 1;
+            j += 1;
+        } else if dp[i + 1][j] >= dp[i][j + 1] {
+            i += 1;
+        } else {
+            j += 1;
+        }
+    }
+    out
+}
+
+/// Align two child sequences (ADR-0048): `struct_eq` LCS anchors the unchanged
+/// children, and each divergent gap pairs old/new positionally (recursing) with
+/// the count difference as added/removed. Anchored (unchanged) children are not
+/// emitted.
+fn align_children(a: &[Datum], b: &[Datum], os: &str, ns: &str) -> Vec<ChildDiff> {
+    let mut children = Vec::new();
+    let (mut pi, mut pj) = (0usize, 0usize);
+    let anchors = lcs_matches(a, b)
+        .into_iter()
+        .chain(std::iter::once((a.len(), b.len())));
+    for (ai, bj) in anchors {
+        let old_gap = &a[pi..ai];
+        let new_gap = &b[pj..bj];
+        let common = old_gap.len().min(new_gap.len());
+        for k in 0..common {
+            if let Some(diff) = diff_forms(&old_gap[k], &new_gap[k], os, ns) {
+                children.push(ChildDiff::Paired {
+                    index: pj + k,
+                    diff,
+                });
+            }
+        }
+        // Removed sit at the current new-side cursor; added follow the paired run.
+        for od in &old_gap[common..] {
+            children.push(ChildDiff::Removed {
+                index: pj + common,
+                frag: frag(od, os),
+            });
+        }
+        for (k, nd) in new_gap.iter().enumerate().skip(common) {
+            children.push(ChildDiff::Added {
+                index: pj + k,
+                frag: frag(nd, ns),
+            });
+        }
+        pi = ai + 1;
+        pj = bj + 1;
+    }
+    children
+}
+
+/// A changed unit together with its intra-unit [`FormDiff`] — the deep diff of one
+/// definition (ADR-0048), the output of [`diff_files_deep`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnitTreeDiff {
+    /// The defining head symbol (e.g. `defun`).
+    pub kind: String,
+    /// The defined name.
+    pub name: String,
+    /// A method's Dispatch signature, or `None`.
+    pub signature: Option<String>,
+    /// New-version start line of the definition.
+    pub line: u32,
+    /// New-version anchor hash of the definition form.
+    pub hash: String,
+    /// How the definition's body changed.
+    pub diff: FormDiff,
+}
+
+/// Deep diff (ADR-0048): for every *changed* definition (optionally filtered to a
+/// `name`), the intra-unit [`FormDiff`]. Added/removed units carry no tree diff
+/// and are not included here — [`diff_files`] reports those.
+pub fn diff_files_deep(
+    old: &str,
+    new: &str,
+    dialect: Dialect,
+    name: Option<&str>,
+) -> Vec<UnitTreeDiff> {
+    let old_parsed = parse(old, &Options::for_dialect(dialect));
+    let new_parsed = parse(new, &Options::for_dialect(dialect));
+    let (old_units, _) = collect_units(old, &old_parsed.data, dialect);
+    let (new_units, _) = collect_units(new, &new_parsed.data, dialect);
+    let matched = match_units(&old_units, &new_units);
+
+    let mut out = Vec::new();
+    for (ou, nu) in &matched.changed {
+        if let Some(want) = name {
+            if nu.key.1 != want {
+                continue;
+            }
+        }
+        if let Some(diff) = diff_forms(ou.form, nu.form, old, new) {
+            out.push(UnitTreeDiff {
+                kind: nu.key.0.clone(),
+                name: nu.key.1.clone(),
+                signature: nu.key.2.clone(),
+                line: nu.line,
+                hash: nu.hash.clone(),
+                diff,
+            });
+        }
+    }
+    out.sort_by_key(|u| u.line);
+    out
+}
+
+/// Parse two source snippets each as a single form and diff them (ADR-0048's
+/// general two-form primitive; the MCP form-string path). `None` if either side
+/// has no form, or they are equal modulo formatting.
+pub fn diff_source_forms(old: &str, new: &str, dialect: Dialect) -> Option<FormDiff> {
+    let old_parsed = parse(old, &Options::for_dialect(dialect));
+    let new_parsed = parse(new, &Options::for_dialect(dialect));
+    let od = old_parsed.data.first()?;
+    let nd = new_parsed.data.first()?;
+    diff_forms(od, nd, old, new)
+}
+
+// ---- Tree-diff rendering ---------------------------------------------------
+
+/// Render a [`FormDiff`] as a pruned structural tree (ADR-0048): the spine of
+/// changed paths, unchanged siblings elided to `…`, changes marked `+`/`-`/`~`.
+/// `indent` is the current depth (2 spaces each).
+pub fn form_diff_text(diff: &FormDiff) -> String {
+    let mut out = String::new();
+    write_form_diff(diff, 1, &mut out);
+    out
+}
+
+fn pad(indent: usize) -> String {
+    "  ".repeat(indent)
+}
+
+fn write_form_diff(diff: &FormDiff, indent: usize, out: &mut String) {
+    match diff {
+        FormDiff::Replace { old, new } => {
+            out.push_str(&format!("{}~ {} ⇒ {}\n", pad(indent), old.text, new.text));
+        }
+        FormDiff::Descend {
+            label,
+            child_count,
+            children,
+        } => {
+            out.push_str(&format!("{}({label}\n", pad(indent)));
+            let mut prev: Option<usize> = None;
+            for child in children {
+                let idx = child_index(child);
+                if prev.map_or(idx > 0, |p| idx > p + 1) {
+                    out.push_str(&format!("{}…\n", pad(indent + 1)));
+                }
+                write_child_diff(child, indent + 1, out);
+                prev = Some(idx);
+            }
+            if prev.map_or(*child_count > 0, |p| p + 1 < *child_count) {
+                out.push_str(&format!("{}…\n", pad(indent + 1)));
+            }
+            out.push_str(&format!("{})\n", pad(indent)));
+        }
+    }
+}
+
+fn child_index(child: &ChildDiff) -> usize {
+    match child {
+        ChildDiff::Added { index, .. }
+        | ChildDiff::Removed { index, .. }
+        | ChildDiff::Paired { index, .. } => *index,
+    }
+}
+
+fn write_child_diff(child: &ChildDiff, indent: usize, out: &mut String) {
+    match child {
+        ChildDiff::Added { frag, .. } => {
+            out.push_str(&format!("{}+ {}\n", pad(indent), frag.text));
+        }
+        ChildDiff::Removed { frag, .. } => {
+            out.push_str(&format!("{}- {}\n", pad(indent), frag.text));
+        }
+        ChildDiff::Paired { diff, .. } => write_form_diff(diff, indent, out),
+    }
+}
+
+/// Render a [`FormDiff`] as JSON (ADR-0048): a recursive node with `status` and
+/// either `children` (descend) or `old`/`new` frags (replace).
+pub fn form_diff_json(diff: &FormDiff) -> serde_json::Value {
+    use serde_json::json;
+    match diff {
+        FormDiff::Replace { old, new } => json!({
+            "status": "replaced",
+            "old": frag_json(old),
+            "new": frag_json(new),
+        }),
+        FormDiff::Descend {
+            label,
+            child_count,
+            children,
+        } => json!({
+            "status": "changed",
+            "label": label,
+            "childCount": child_count,
+            "children": children.iter().map(child_diff_json).collect::<Vec<_>>(),
+        }),
+    }
+}
+
+fn frag_json(f: &Frag) -> serde_json::Value {
+    serde_json::json!({ "text": f.text, "line": f.line, "hash": f.hash })
+}
+
+fn child_diff_json(child: &ChildDiff) -> serde_json::Value {
+    use serde_json::json;
+    match child {
+        ChildDiff::Added { index, frag } => {
+            json!({ "status": "added", "index": index, "new": frag_json(frag) })
+        }
+        ChildDiff::Removed { index, frag } => {
+            json!({ "status": "removed", "index": index, "old": frag_json(frag) })
+        }
+        ChildDiff::Paired { index, diff } => {
+            let mut node = form_diff_json(diff);
+            node.as_object_mut()
+                .unwrap()
+                .insert("index".into(), json!(index));
+            node
+        }
+    }
+}
+
+/// Render a deep diff ([`diff_files_deep`]) as text: each changed unit's header
+/// followed by its pruned tree.
+pub fn deep_text(units: &[UnitTreeDiff]) -> String {
+    let mut out = String::new();
+    for u in units {
+        let sig = u
+            .signature
+            .as_deref()
+            .map(|s| format!(" {s}"))
+            .unwrap_or_default();
+        out.push_str(&format!(
+            "~ {} {}{sig}  {}:{}\n",
+            u.kind, u.name, u.line, u.hash
+        ));
+        out.push_str(&form_diff_text(&u.diff));
+    }
+    out
+}
+
+/// Render a deep diff ([`diff_files_deep`]) as a JSON array of unit nodes.
+pub fn deep_json(units: &[UnitTreeDiff]) -> serde_json::Value {
+    use serde_json::json;
+    units
+        .iter()
+        .map(|u| {
+            json!({
+                "kind": u.kind,
+                "name": u.name,
+                "signature": u.signature,
+                "line": u.line,
+                "hash": u.hash,
+                "diff": form_diff_json(&u.diff),
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -384,6 +843,106 @@ mod tests {
     fn identical_files_are_empty() {
         let src = "(defun f (x) (+ x 1))\n(defvar y 2)\n";
         assert!(diff_files(src, src, Dialect::EmacsLisp).is_empty());
+    }
+
+    // ---- Tree diff (ADR-0048) ----
+
+    fn only_child(diff: &FormDiff) -> &ChildDiff {
+        match diff {
+            FormDiff::Descend { children, .. } => {
+                assert_eq!(children.len(), 1, "expected exactly one changed child");
+                &children[0]
+            }
+            FormDiff::Replace { .. } => panic!("expected a Descend, got a Replace"),
+        }
+    }
+
+    fn diff2(old: &str, new: &str) -> FormDiff {
+        diff_source_forms(old, new, Dialect::EmacsLisp).expect("forms should differ")
+    }
+
+    #[test]
+    fn formatting_modulo_is_no_diff() {
+        assert!(diff_source_forms("(f  a\n   b)", "(f a b)", Dialect::EmacsLisp).is_none());
+    }
+
+    #[test]
+    fn head_change_is_a_child_zero_replace() {
+        // `when` -> `unless`: the head is child 0, so it reads as a replace there,
+        // not a whole-form replace.
+        let d = diff2("(when c a)", "(unless c a)");
+        match only_child(&d) {
+            ChildDiff::Paired { index, diff } => {
+                assert_eq!(*index, 0);
+                assert!(matches!(diff, FormDiff::Replace { .. }));
+            }
+            other => panic!("expected a paired child-0 replace, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn localized_edit_stays_local() {
+        // Only the middle arg changed; the neighbours are unchanged and elided.
+        let d = diff2("(f a b c)", "(f a x c)");
+        match only_child(&d) {
+            ChildDiff::Paired { index, diff } => {
+                assert_eq!(*index, 2);
+                assert!(matches!(diff, FormDiff::Replace { .. }));
+            }
+            other => panic!("expected one paired replace at index 2, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn insertion_is_one_added_child() {
+        let d = diff2("(f a b)", "(f a z b)");
+        match only_child(&d) {
+            ChildDiff::Added { index, frag } => {
+                assert_eq!(*index, 2);
+                assert_eq!(frag.text, "z");
+            }
+            other => panic!("expected one added child, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn delimiter_mismatch_is_a_replace() {
+        let d = diff2("(a b)", "[a b]");
+        assert!(
+            matches!(d, FormDiff::Replace { .. }),
+            "different delimiters must not recurse"
+        );
+    }
+
+    #[test]
+    fn reorder_is_add_remove_or_change_not_empty() {
+        // A documented non-goal: a reorder is *not* detected as a move — it
+        // surfaces as some non-empty set of child changes. Pinned so the behavior
+        // stays known.
+        let d = diff_source_forms("(f a b)", "(f b a)", Dialect::EmacsLisp);
+        assert!(d.is_some(), "a reorder is a (non-move) change, not empty");
+    }
+
+    #[test]
+    fn deep_diff_of_a_changed_defun() {
+        let old = "(defun g (x) (+ x 1))\n";
+        let new = "(defun g (x) (+ x 2))\n";
+        let deep = diff_files_deep(old, new, Dialect::EmacsLisp, None);
+        assert_eq!(deep.len(), 1);
+        assert_eq!(deep[0].name, "g");
+        // The 1 -> 2 replace is somewhere in the tree; the text renders it.
+        let text = form_diff_text(&deep[0].diff);
+        assert!(text.contains("1 ⇒ 2"), "rendered tree:\n{text}");
+    }
+
+    #[test]
+    fn deep_diff_unit_filter() {
+        let old = "(defun a () 1)\n(defun b () 2)\n";
+        let new = "(defun a () 10)\n(defun b () 20)\n";
+        assert_eq!(diff_files_deep(old, new, Dialect::EmacsLisp, None).len(), 2);
+        let only_b = diff_files_deep(old, new, Dialect::EmacsLisp, Some("b"));
+        assert_eq!(only_b.len(), 1);
+        assert_eq!(only_b[0].name, "b");
     }
 
     #[test]

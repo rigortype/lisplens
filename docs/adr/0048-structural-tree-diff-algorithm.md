@@ -90,7 +90,13 @@ not emitted. Two renderings from the one tree:
 
 ## Status
 
-proposed
+accepted
 
-(Pre-drafted from a spec grilling; the implementing agent — GitHub issue #41 —
-flips this to `accepted` and reconciles any wording with what shipped.)
+Shipped in `src/diff.rs`: `diff_forms` (the engine), `diff_files_deep`
+(`--deep` / `--unit`), and `diff_source_forms` (the general two-form primitive,
+also the MCP form-string path), with the pruned-tree text renderer and the JSON
+DiffTree. The Prefixed case recurses into `inner` only when the auxiliary `arg`
+is equal (a differing prefix arg replaces the whole form) — a small pragmatic
+narrowing of "recurse into inner (+ arg)". Verified end-to-end on `cc-engine.el`
+emacs-30 → emacs-31 (e.g. `--unit c-foreign-truncate-lit-pos-cache` shows the
+inner `c-truncate-lit-pos-cache` → `c-truncate-lit-pos/state-cache` rename).

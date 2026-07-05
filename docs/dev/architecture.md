@@ -23,7 +23,7 @@ content-hash **anchor** for any target, and edit by anchor.
 | `refactor` | Semantic refactoring procedures (ADR-0032): `rename_symbol_in_file` (symbol-exact), `inline_definition_in_file` (expand a function at its call sites), `rewrite_in_file` (structural pattern→template "sed", ADR-0033), and `extract_into_function` (pull a form into a new function, ADR-0034 — pure cut+wrap, user-supplied params) over `structural` + the safety pipeline |
 | `search` | `find_definitions` / `find_symbol` (code-vs-data via lispexp `walk`) + text renderers (ADR-0010) |
 | `sexpr` | shared structural-comparison primitives — `struct_eq` (Structural equality, modulo formatting, ADR-0033) + `opt_eq`; the basis of `refactor`'s matching and `diff` |
-| `diff` | Structural diff (ADR-0047): `diff_files` compares two versions by top-level definition — added/removed/changed via `struct_eq`, keyed `(kind, name, dispatch?)` — plus `diff_text`/`diff_json` renderers |
+| `diff` | Structural diff. `diff_files` compares two versions by top-level definition (ADR-0047: added/removed/changed via `struct_eq`, keyed `(kind, name, dispatch?)`); `diff_forms`/`diff_files_deep`/`diff_source_forms` are the intra-form tree diff (ADR-0048: struct_eq-LCS child alignment + positional gap pairing, category-gated recursion, four statuses). `*_text`/`*_json` + `deep_*` renderers |
 | `config` | resolve `indent-tabs-mode`/`tab-width` from file-local/dir-locals/EditorConfig (ADR-0029); file-local + dir-local *parsing* delegated to `lispexp_emacs::{local_vars,dir_locals}` (lispexp ADR-0033), EditorConfig stays in-tree |
 | `format` | native Lisp indenter, dialect-dispatched: shared driver + an `Engine` per bundled Emacs indenter (Emacs Lisp `lisp-indent-function`; Common Lisp `common-lisp-indent-function` in `format/commonlisp.rs`; Scheme family `scheme-indent-function` in `format/scheme.rs`; generic fallback for the rest) — see `formatter.md`; Emacs Lisp bundled table from `lispexp_emacs::indent::bundled_table` (ADR-0011/0025-0028/**0031**; crate split lispexp ADR-0033) |
 | `parinfer` | native parinfer-style whole-buffer transform (ADR-0045): `run(Request)->Answer`, stateless, stdin→stdout. Paren mode = balance-checked faithful reindent (reuses `format`); Indent mode = infer close-parens from indentation over a tolerant `lex()` token scan (own `col_at`/`display_col` columns; Nameless-aware via `Nameless::saving`, ADR-0030; minimal cursor-line trail protection, #31). balance-*generating* safety. `run_json`/`run_json_line` drive the MCP tool and the persistent `parinfer --server` (line-delimited JSON, ADR-0046) |
@@ -45,7 +45,7 @@ format <file>               reindent a Lisp file (native, by dialect; honors con
 parinfer <mode>             parinfer-style transform, stdin→stdout (paren/indent; ADR-0045)
 parinfer --server           persistent line-delimited JSON server for editors (ADR-0046)
 check  <file>               parse-check (diagnostics; non-zero exit on errors, ADR-0032)
-diff <old> <new> [--json]   structural diff by definition (ADR-0047; exit 0 regardless of differences)
+diff <old> <new> [--json] [--deep|--unit NAME]   structural diff: definition map (ADR-0047), or drill a changed def (ADR-0048); exit 0 regardless of differences
 rename <old> <new> <file>   rename a symbol across a file (symbol-exact, safe, ADR-0032)
 inline <name> <file>        inline a function at its call sites (safe subset, ADR-0032)
 rewrite <file>              structural pattern→template rewrite, spec on stdin (ADR-0033)

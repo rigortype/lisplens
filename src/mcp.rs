@@ -127,13 +127,18 @@ fn tools() -> Value {
         ),
         tool(
             "diff",
-            "Structural diff of two file versions at top-level definition granularity (ADR-0047): which definitions were added/removed/changed, modulo formatting (whitespace/comment churn is not a change). Returns terse grouped text, or a JSON object {changed, added, removed, otherFormsChanged} when `json` is true",
+            "Structural diff of two Lisp versions, modulo formatting (whitespace/comment churn is never a change). File mode (`old`+`new` paths): the definition-level attention map (ADR-0047) — which definitions were added/removed/changed. Add `deep` to drill every changed definition's internals, or `unit` to drill one by name (ADR-0048). Form mode (`oldForm`+`newForm` snippet strings, `dialect` optional): the intra-form tree diff of the two forms directly. `json` returns structured output instead of text",
             json!({
-                "old": json!({ "type": "string", "description": "path to the old/base version" }),
-                "new": json!({ "type": "string", "description": "path to the new version" }),
+                "old": json!({ "type": "string", "description": "path to the old/base version (file mode)" }),
+                "new": json!({ "type": "string", "description": "path to the new version (file mode)" }),
+                "deep": json!({ "type": "boolean", "description": "drill each changed definition's internals (ADR-0048)" }),
+                "unit": json!({ "type": "string", "description": "drill only the definition(s) with this name (implies deep)" }),
+                "oldForm": json!({ "type": "string", "description": "old form snippet (form mode; with newForm)" }),
+                "newForm": json!({ "type": "string", "description": "new form snippet (form mode; with oldForm)" }),
+                "dialect": json!({ "type": "string", "description": "dialect for form mode, kebab-case (default emacs-lisp)" }),
                 "json": json!({ "type": "boolean", "description": "return the structured JSON diff instead of text (default false)" })
             }),
-            &["old", "new"]
+            &[]
         ),
         tool(
             "parinfer",
@@ -276,19 +281,46 @@ fn run_tool(name: &str, args: &Value) -> Result<String, String> {
         // `{text, success, error, cursor*}` answer out (bad input → success:false).
         "parinfer" => Ok(crate::parinfer::run_json(args).to_string()),
         "diff" => {
+            let json = args.get("json").and_then(Value::as_bool).unwrap_or(false);
+            // Form-string mode: compare two form snippets directly (ADR-0048's
+            // general two-form primitive), no files.
+            if let (Some(of), Some(nf)) = (
+                args.get("oldForm").and_then(Value::as_str),
+                args.get("newForm").and_then(Value::as_str),
+            ) {
+                let dialect = args
+                    .get("dialect")
+                    .and_then(Value::as_str)
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(crate::Dialect::EmacsLisp);
+                return Ok(match crate::diff::diff_source_forms(of, nf, dialect) {
+                    None => String::new(),
+                    Some(d) if json => crate::diff::form_diff_json(&d).to_string(),
+                    Some(d) => crate::diff::form_diff_text(&d),
+                });
+            }
             let old = arg(args, "old")?;
             let new = arg(args, "new")?;
             let old_src = read(old)?;
             let new_src = read(new)?;
             let dialect = dialect_for_path(Path::new(new));
-            let diff = crate::diff::diff_files(&old_src, &new_src, dialect);
-            Ok(
-                if args.get("json").and_then(Value::as_bool).unwrap_or(false) {
-                    crate::diff::diff_json(&diff).to_string()
+            let unit = args.get("unit").and_then(Value::as_str);
+            let deep = unit.is_some() || args.get("deep").and_then(Value::as_bool).unwrap_or(false);
+            Ok(if deep {
+                let d = crate::diff::diff_files_deep(&old_src, &new_src, dialect, unit);
+                if json {
+                    crate::diff::deep_json(&d).to_string()
                 } else {
-                    crate::diff::diff_text(&diff)
-                },
-            )
+                    crate::diff::deep_text(&d)
+                }
+            } else {
+                let d = crate::diff::diff_files(&old_src, &new_src, dialect);
+                if json {
+                    crate::diff::diff_json(&d).to_string()
+                } else {
+                    crate::diff::diff_text(&d)
+                }
+            })
         }
         "rename" => {
             let file = arg(args, "file")?;
