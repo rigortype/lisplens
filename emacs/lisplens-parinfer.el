@@ -5,7 +5,7 @@
 ;; Author: USAMI Kenta <tadsan@zonu.me>
 ;; URL: https://github.com/rigortype/lisplens
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "27.1"))
+;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: languages, lisp, tools
 
 ;; This program is free software; you can redistribute it and/or modify
@@ -205,12 +205,10 @@ beginning, keeping the cursor line/column arithmetic exact."
   (interactive)
   (lisplens-parinfer--run 'indent))
 
-(defvar lisplens-parinfer-mode-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "C-c C-p p") #'lisplens-parinfer-paren)
-    (define-key map (kbd "C-c C-p i") #'lisplens-parinfer-indent)
-    map)
-  "Keymap for `lisplens-parinfer-mode'.")
+(defvar-keymap lisplens-parinfer-mode-map
+  :doc "Keymap for `lisplens-parinfer-mode'."
+  "C-c C-p p" #'lisplens-parinfer-paren
+  "C-c C-p i" #'lisplens-parinfer-indent)
 
 ;;;###autoload
 (define-minor-mode lisplens-parinfer-mode

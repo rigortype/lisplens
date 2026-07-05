@@ -10,7 +10,7 @@ this package talks to **one long-lived `lisplens parinfer --server` process**
 
 ## Requirements
 
-- Emacs 27.1+ (native JSON, `replace-region-contents`).
+- Emacs 29.1+ (native JSON, `replace-region-contents`, `string-search`, `defvar-keymap`).
 - The `lisplens` executable on `exec-path` (`cargo install lisplens`, or point
   `lisplens-parinfer-executable` at a build).
 
