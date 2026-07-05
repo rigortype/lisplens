@@ -1,1 +1,4 @@
 /target
+
+# Emacs byte-compiled files
+emacs/*.elc

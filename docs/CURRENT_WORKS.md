@@ -25,9 +25,14 @@ the server protocol + editor-server model; ADR-0045 gains the cursor-protection 
 **#30 + #31 shipped** (this branch, one PR): `parinfer --server` (persistent line-delimited
 JSON; `run_json`/`run_json_line` shared with the MCP tool; a malformed line → error answer,
 never desyncs) + indent-mode cursor-line trail protection (locks the cursor line's trail,
-yields to the balance guarantee when needed). ADR-0046 added; ADR-0045 updated. **Next:
-#32** — the Emacs `lisplens-parinfer.el` minor-mode (explicit commands over the server),
-then #33 live fire-on-edit.
+yields to the balance guarantee when needed). ADR-0046 added; ADR-0045 updated. **#32
+shipped** (this branch): the companion Emacs package `emacs/lisplens-parinfer.el` — drives
+one shared `parinfer --server` process; `lisplens-parinfer-paren`/`-indent` (+ a minor
+mode) transform the buffer/region with marker/point-preserving replace, dialect from
+major-mode, Nameless opt-in, refuse-unchanged on failure. Byte-compiles clean on Emacs 32;
+smoke-tested end-to-end (indent infers closers, paren reindents, unbalanced untouched,
+point survives, one process reused). `emacs/` excluded from the published crate. **Next:
+#33** — live fire-on-edit (`post-command-hook`, using the #31 cursor protection).
 
 ## Prior arc (done): 0.3.0 release + the stateless parinfer command
 
