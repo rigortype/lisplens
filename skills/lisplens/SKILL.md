@@ -102,11 +102,10 @@ TAG
 ```
 Get the `@` hash from `line read`'s header or the `ok <hash>` a prior edit
 printed. Shared verbs: `replace <anchor> <<TAG…`, `delete <anchor>`,
-`insert-after`/`insert-before <anchor> <<TAG…`. `insert-*` target a top-level or
-sibling form; anchoring one at an inner node (say a defun's arglist) is rejected
-with `BadOp` — to change something *inside* a form, `replace` the enclosing form
-instead (e.g. to add a docstring, replace the whole defun with the docstring in
-place).
+`insert-after`/`insert-before <anchor> <<TAG…`. `insert-*` place the payload as a
+new sibling next to the anchored node — the anchor may be an *inner* node (say a
+defun's arglist), so this is how you add a form *inside* another form; the touched
+top-level form is reindented so the new line lands at the right column.
 
 - **`struct edit`** — replace/restructure a *whole form*; on Emacs Lisp it also
   reindents the touched top-level forms, preserving the file's existing

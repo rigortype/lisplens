@@ -13,6 +13,31 @@ use lispexp::{Datum, DatumKind, Delim};
 
 use crate::edit::Edit;
 
+/// Insert `text` as a new sibling immediately **after** `node` (ADR-0021).
+///
+/// Works for any node — a top-level form or an inner one (e.g. a defun's
+/// argument list) — since it only anchors on the node's own span. The payload
+/// goes on its own line; for a dialect with a native indenter the caller's
+/// post-edit reindent (ADR-0025/0028) then places it at the right column, so the
+/// separator here just has to keep the form parseable.
+pub fn insert_after(node: &Datum, text: &str) -> Vec<Edit> {
+    let end = node.span.end as usize;
+    vec![Edit {
+        range: end..end,
+        text: format!("\n{text}"),
+    }]
+}
+
+/// Insert `text` as a new sibling immediately **before** `node` (ADR-0021). See
+/// [`insert_after`] for the any-node / reindent notes.
+pub fn insert_before(node: &Datum, text: &str) -> Vec<Edit> {
+    let start = node.span.start as usize;
+    vec![Edit {
+        range: start..start,
+        text: format!("{text}\n"),
+    }]
+}
+
 /// Wrap `node` in a new enclosing list: `x` → `(prefix x)`.
 ///
 /// `prefix` is the leading text placed inside the new parens before the node
