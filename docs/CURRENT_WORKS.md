@@ -4,7 +4,27 @@ Ephemeral snapshot. **Durable knowledge is in the dev docs** (see `AGENTS.md` �
 Codebase): `docs/dev/architecture.md`, `docs/dev/formatter.md`, `CONTEXT.md`,
 `docs/adr/`.
 
-## Handoff — resume here: 0.3.0 is released; pick from the candidate work below
+## Handoff — resume here: live-parinfer editor initiative (issues #30–33)
+
+**Now in flight — live parinfer for Emacs (issues #30–33).** After the #24–26 arc
+shipped the stateless `parinfer` command, the next initiative is the Emacs editor
+integration, pinned in a grilling/design session. Decision: a **new native Emacs
+minor-mode** (`emacs/lisplens-parinfer.el`) — *not* a fork of `parinfer-rust-mode`
+(which loads an in-process dynamic module and is built around incremental smart mode;
+lisplens is a CLI subprocess with a stateless whole-buffer transform — as-is is
+impossible, a fork is mostly deletion). For the live per-keystroke UX, lisplens keeps
+**one shared persistent process** per Emacs and the mode talks to it. Four slices, all
+`ready-for-agent`: **#30** `lisplens parinfer --server` (persistent line-delimited JSON
+server, stateless per-request, reuses `parinfer::run`) → **#31** minimal cursor-line
+paren-trail protection in indent mode (the one parinfer cursor rule needed for live —
+leave the cursor line's trail alone; not full smart mode) → **#32** the minor-mode with
+explicit commands over the server (marker/undo-safe replace, dialect from major-mode,
+Nameless opt-in) → **#33** live fire-on-edit (`post-command-hook`, debounced, cursor
+protection in effect). Deps: #30→#32, #31 independent, {#32,#31}→#33. A new ADR covers
+the server protocol + editor-server model; ADR-0045 gains the cursor-protection rule.
+**Currently implementing #30 + #31 together** (both lisplens-side, bundled in one PR).
+
+## Prior arc (done): 0.3.0 release + the stateless parinfer command
 
 **Where.** On **`master`**, clean, at the release commit
 `4376cac Bump up version to 0.3.0` (merge `eef5d45`, tagged **`v0.3.0`**). Since
