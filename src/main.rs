@@ -11,6 +11,12 @@ use std::sync::OnceLock;
 /// by [`resolve_dialect`]. `None` (or unset) means "guess from the file extension".
 static DIALECT_OVERRIDE: OnceLock<Option<lisplens::Dialect>> = OnceLock::new();
 
+/// Whether `--dialect islisp-eisl` selected the opt-in EISL indent style
+/// (ADR-0042). It resolves the dialect to ISLisp *and* sets this flag, which
+/// `run_format` folds into `FormatConfig.islisp_eisl`. Plain `--dialect islisp`
+/// leaves it false (generic fallback).
+static ISLISP_EISL: OnceLock<bool> = OnceLock::new();
+
 /// The dialect for `path`: the `--dialect` override if one was given, else the
 /// extension guess ([`lisplens::dialect_for_path`]). Single-file commands route
 /// through here so `--dialect` can force an ambiguous extension (`.lsp` is Common
@@ -24,9 +30,17 @@ fn resolve_dialect(path: &Path) -> lisplens::Dialect {
 }
 
 /// Parse a dialect from its kebab-case name (`islisp`, `common-lisp`, `clojure`, …).
+/// The lisplens-only pseudo-dialect `islisp-eisl` resolves to ISLisp and records
+/// the opt-in EISL indent style (ADR-0042) in [`ISLISP_EISL`].
 fn parse_dialect(name: &str) -> Result<lisplens::Dialect, String> {
+    if name == "islisp-eisl" {
+        let _ = ISLISP_EISL.set(true);
+        return Ok(lisplens::Dialect::Islisp);
+    }
     name.parse::<lisplens::Dialect>().map_err(|_| {
-        format!("unknown --dialect `{name}` (try islisp, common-lisp, clojure, scheme, …)")
+        format!(
+            "unknown --dialect `{name}` (try islisp, islisp-eisl, common-lisp, clojure, scheme, …)"
+        )
     })
 }
 
@@ -223,6 +237,9 @@ fn run_format(args: &[&str]) -> ExitCode {
     // `--tonsky` forces the Clojure fixed style on (a `clojure-ts-indent-style:
     // fixed` file-/dir-local resolves it too).
     config.clojure_fixed_indent |= tonsky;
+    // `--dialect islisp-eisl` forces the opt-in EISL style on (an
+    // `islisp-indent-style: eisl` file-/dir-local resolves it too, ADR-0042).
+    config.islisp_eisl |= ISLISP_EISL.get().copied().unwrap_or(false);
     // Nameless emulation is Emacs Lisp-only (ADR-0030); `--nameless` forces it
     // on, a `nameless-mode` file-/dir-local resolves it too. Every other dialect
     // (Common Lisp, and the generic fallback for the rest) formats by dialect.

@@ -386,14 +386,16 @@ fn rules_for(name: &str, dialect: Dialect) -> &'static [Rule] {
         Dialect::Janet => janet_rules_for(name),
         Dialect::Hy => hy_rules_for(name),
         Dialect::Lfe => lfe_rules_for(name),
+        Dialect::Islisp => islisp_rules_for(name),
         _ => clojure_rules_for(name),
     }
 }
 
-/// `[:inner 0]` — the only rule shape the four "standard Lisp body+2" dialects
-/// below use: a *special* head body-indents all its children at `open + 2`,
-/// everything else aligns under arg 0 (the default). Their body width is 2 (the
-/// shared default), so unlike ISLisp no width override is needed (ADR-0043).
+/// `[:inner 0]` — the only rule shape the "standard Lisp body+2" dialects below
+/// (and ISLisp, ADR-0042) use: a *special* head body-indents all its children at
+/// `open + body`, everything else aligns under arg 0 (the default). Body width is
+/// the shared default 2 for Fennel/Janet/Hy/LFE; ISLisp overrides it to 4 in
+/// `format_impl` (ADR-0043/0042).
 const I0: &[Rule] = &[Rule::Inner {
     depth: 0,
     idx: None,
@@ -509,6 +511,31 @@ fn lfe_rules_for(name: &str) -> &'static [Rule] {
         | "let*" | "flet" | "fletrec" | "lambda" | "match-lambda" | "progn" | "receive" | "try"
         | "maybe" | "after" | "else" | "eval-when-compile" | "extend-module" | "when-let"
         | "cond" | "do" => I0,
+        _ => &[],
+    }
+}
+
+/// ISLisp's indent table, **induced from the EISL corpus** and cross-checked against
+/// `edlis` (ADR-0042). EISL's editor `edlis` uses a binary rule (`calc_tabs` in
+/// `edlis.c`): a *special* head body-indents at a fixed `paren + 4`, everything else
+/// aligns under arg 0. That maps exactly onto this engine as `[:inner 0]` for the
+/// special set (body always `open + body`, with `body = 4` for ISLisp) and the default
+/// alignment for the rest — so `if`/`cond`/`for`/`when` align under arg 0, the
+/// distinctive EISL house style the induction confirmed. The set is `edlis`'s 12-entry
+/// `special[]` (`syn_highlight.c`) plus the body-indenting forms the corpus attests but
+/// `edlis` omits (`defmethod`, `dolist`, `lambda`, `labels`, …): descriptive of how
+/// EISL is actually written, not just `edlis`'s minimal table.
+fn islisp_rules_for(name: &str) -> &'static [Rule] {
+    match name {
+        // edlis `special[]` (verbatim): definition + control forms.
+        "defun" | "defmacro" | "defglobal" | "defdynamic" | "defconstant" | "defmodule"
+        | "let" | "let*" | "plet" | "case" | "while" | "progn"
+        // induced (corpus-attested, standard body forms edlis omits):
+        | "defclass" | "defgeneric" | "defmethod" | "defpublic" | "defpattern"
+        | "dolist" | "dotimes" | "for-each" | "lambda" | "flet" | "labels"
+        | "unwind-protect" | "block" | "iter" | "c-lang"
+        | "with-open-input-file" | "with-open-output-file" | "with-open-io-file"
+        | "with-standard-input" | "with-standard-output" | "with-error-output" => I0,
         _ => &[],
     }
 }
@@ -690,6 +717,17 @@ mod tests {
             ),
             lfe
         );
+    }
+
+    /// Reindent ISLisp in the opt-in **EISL** style (`islisp_eisl`, ADR-0042); the
+    /// reference is EISL's `edlis` (`calc_tabs`): special → body at `open + 4`, else
+    /// align under arg 0. Plain ISLisp (without the flag) rides the generic fallback.
+    fn fmt_islisp(input: &str) -> String {
+        let config = FormatConfig {
+            islisp_eisl: true,
+            ..FormatConfig::default()
+        };
+        crate::format::format(input, &config, Dialect::Islisp)
     }
 
     #[test]
@@ -1005,6 +1043,39 @@ y)
   y)
 (defstruct Point [x y])";
         assert_eq!(fmt_phel(input), want, "\n{}", fmt_phel(input));
+    }
+
+    #[test]
+    fn islisp_special_forms_body_indent_and_calls_align() {
+        // EISL/edlis model (ADR-0042): a *special* head (defun/let/case/…, plus the
+        // corpus-attested defmethod/dolist/…) body-indents at `open + 4`; every other
+        // head — including `if`/`cond`/`for`/`when`, the distinctive EISL style —
+        // aligns under arg 0. Nested specials indent from their own open paren.
+        let input = "\
+(defun f (a)
+(the <list> a)
+(let ((x 1))
+(bar x)))
+(if c
+then
+else)
+(defmethod m (x)
+(body x))
+(foo a
+b)";
+        let want = "\
+(defun f (a)
+    (the <list> a)
+    (let ((x 1))
+        (bar x)))
+(if c
+    then
+    else)
+(defmethod m (x)
+    (body x))
+(foo a
+     b)";
+        assert_eq!(fmt_islisp(input), want, "\n{}", fmt_islisp(input));
     }
 
     #[test]

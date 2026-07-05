@@ -227,13 +227,62 @@ Deferred until the gate passes: any runtime/CLI surface. The learner is offline 
   (richer) style over `edlis`'s 12-entry approximation. Corpus induction is validated end to
   end (Clojure gate + EISL target).
 
-## Next (Step 3)
+## Step 3 done — ISLisp engine shipped (ADR-0042)
 
-Ship an ISLisp engine as an **induced table on the Emacs-family shape** — special-set +
-body width ≈ 4 + align-under-arg-0 default — seeded from the corpus induction (superset of
-`edlis`'s `special[]`, pruned by a consistency bar and hand-review of the residual heads).
-Record the decision + the induction method in **ADR-0042**, and graduate the learner from
-the scratchpad PoC into repo tooling (an `xtask`/example that regenerates the table). Then
-repeat for Fennel/Janet/Hy/LFE against their own de-facto corpora. Open refinement carried
-from Step 1: the finer offset-per-form (some EISL specials cluster at 2/3, not just 4 — a
-per-head width, or corpus noise, to resolve during the ship).
+Shipped a native ISLisp engine as an **induced table on the shared Clojure engine** —
+special-set → `[:inner 0]` + align-under-arg-0 default + body width 4 — the exact
+Emacs-family shape edlis's `calc_tabs` uses. The special set is edlis's `special[]`
+plus the corpus-attested body forms it omits (`defmethod`/`dolist`/`lambda`/…);
+`if`/`cond`/`for`/`when` stay aligning. Shipped as an **opt-in style** (the
+cross-implementation check below showed EISL's rule is one community's, not universal
+ISLisp): reached via `--dialect islisp-eisl` or an `islisp-indent-style: eisl`
+file-local, while plain `--dialect islisp` keeps the generic fallback and the `.lsp`
+default stays Common Lisp. A golden test locks edlis's model.
+
+**The decisive number:** on EISL-native sources (`library`/`example`/`verify`/`tests`)
+the induced engine matches **75.2%** of code-line indentation vs **54.2%** for the old
+generic Emacs Lisp fallback (+21 pt) — corpus induction produced a materially better
+engine than any off-the-shelf port. `bench/` is an outlier (25%): Gabriel benchmarks
+ported from CL/Scheme carry foreign indentation — the multi-style-corpus caveat, made
+concrete, not an engine gap. A single body width can't be byte-exact on a corpus that
+isn't itself uniform; the engine normalises toward edlis's plurality style.
+
+## Cross-implementation check — ISLisp style is per-community, not per-language
+
+Tested the EISL-induced engine against *other* ISLisp implementations' code to see
+whether "ISLisp indentation" generalises. It does **not** — and that is the headline
+finding.
+
+- **KISS** (github.com/nenbutsu/kiss, an ISLisp processor; its files carry an Emacs
+  `;;; -*- mode: lisp -*-` header, i.e. they were **Emacs-formatted**). Self-consistency
+  of its `lisp/` sources: **common-lisp 80.6%**, emacs-lisp 66.3%, **islisp/edlis 19.6%**.
+  Inducing from KISS gives body width **2** (not EISL's 4) with `defun`/`let`/`case`/`while`
+  all at +2 and `if`/`cond` aligning — i.e. the **Common Lisp / Emacs convention**.
+- **Daylisp** (SourceForge, a Java ISLisp): only 3 `.lsp`, all styles low (best is
+  common-lisp 28%) — too small and idiosyncratic to conclude much beyond "not edlis".
+- **OpenLisp** (Christian Jullien / eligis.com): source not retrievable — eligis is
+  down (HTTP 522) and OpenLisp is partly commercial; no open mirror found. Unchecked.
+
+**Conclusion.** The same language, ISLisp, hosts **divergent indentation styles across
+implementations**: EISL follows its editor `edlis` (special → body **+4**, rich special
+set), while KISS follows the Common Lisp / Emacs convention (body **+2**, `if`/`cond`
+align). So indentation style is a property of a **corpus / community**, not of the
+language — which is exactly what corpus induction is built to capture, and a caution
+against a single dialect→engine mapping when a language has more than one community.
+
+**Consequence for the ISLisp engine (ADR-0042).** `--dialect islisp` encodes the **EISL
+(edlis) style** specifically — right for EISL code (75% vs 54% fallback), but wrong for
+CL-styled ISLisp like KISS, which the **Common Lisp engine** already fits at ~81%. So the
+honest guidance is: EISL-style code → `--dialect islisp`; CL/Emacs-style ISLisp → `--dialect
+common-lisp`. A future refinement is per-project **style detection** (e.g. an induced body
+width + a header like KISS's `mode: lisp`) rather than a fixed per-dialect engine.
+
+## Next
+
+- Graduate the learner from the scratchpad PoC into repo tooling (an `xtask`/example
+  that regenerates a dialect's table), so induced tables are reproducible in-tree.
+- Per-project **style selection/detection** for languages with divergent community
+  styles (the ISLisp EISL-vs-KISS split) — the deeper lesson from the cross-check.
+- Finer per-form body width (some EISL specials cluster at 2/3, not just 4).
+- Apply the method to the other fallback dialects (Fennel/Janet/Hy/LFE) against their
+  own de-facto corpora, validating against any reference each has (fnlfmt, spork/fmt, …).

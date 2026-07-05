@@ -59,7 +59,7 @@ enum Engine {
 /// permissive superset) uses the Scheme engine; everything else (Emacs Lisp plus
 /// the dialects Emacs has no indenter for) uses the Emacs Lisp engine as the
 /// generic fallback.
-fn engine_for(dialect: Dialect) -> Engine {
+fn engine_for(dialect: Dialect, config: &FormatConfig) -> Engine {
     match dialect {
         Dialect::CommonLisp => Engine::CommonLisp,
         Dialect::Scheme
@@ -73,12 +73,17 @@ fn engine_for(dialect: Dialect) -> Engine {
         // Fennel/Janet/Hy/LFE are "standard Lisp body+2" dialects reusing the same
         // engine with a per-dialect special-form table (ADR-0043) — Fennel/Janet from
         // their formatters (`fnlfmt`, `spork/fmt`), Hy/LFE induced from their corpora.
+        // Each selects its own indent table inside the engine by dialect.
         Dialect::Clojure
         | Dialect::Phel
         | Dialect::Fennel
         | Dialect::Janet
         | Dialect::Hy
         | Dialect::Lfe => Engine::Clojure,
+        // ISLisp rides the same engine with a corpus-induced table (ADR-0042), but
+        // only for the **opt-in** EISL style; plain ISLisp uses the generic fallback,
+        // since `open + 4` / align-under-arg-0 is one community's convention.
+        Dialect::Islisp if config.islisp_eisl => Engine::Clojure,
         _ => Engine::Elisp,
     }
 }
@@ -110,6 +115,9 @@ pub fn has_native_engine(dialect: Dialect) -> bool {
             | Dialect::Hy
             | Dialect::Lfe
     )
+    // ISLisp is deliberately absent: its EISL engine is an opt-in explicit-`format`
+    // style (ADR-0042), and ISLisp is not extension-detected, so structural edits
+    // leave it byte-identical rather than auto-reflowing via the generic fallback.
 }
 
 /// Column arithmetic that accounts for reindentation already applied to earlier
@@ -264,7 +272,7 @@ fn format_impl(
     nameless: Option<&Nameless>,
     touched: Option<Touched>,
 ) -> String {
-    let engine = engine_for(dialect);
+    let engine = engine_for(dialect, config);
     // Keep `#_` / `#;` discarded forms in the tree (as `Prefixed { Discard, … }`)
     // so lines *inside* a multi-line discard indent against the discarded form,
     // not its enclosing container — the reindenter is a round-trip consumer, and
@@ -358,7 +366,14 @@ fn format_impl(
                             &parsed.data,
                             c,
                             range.start,
-                            config.body_indent,
+                            // EISL's body indent is edlis's fixed `paren + 4`
+                            // (ADR-0042), not the Lisp default 2 that Clojure/Phel use.
+                            // Only the opt-in EISL style reaches this engine for ISLisp.
+                            if dialect == Dialect::Islisp && config.islisp_eisl {
+                                4
+                            } else {
+                                config.body_indent
+                            },
                             config.clojure_fixed_indent,
                             dialect,
                         ),

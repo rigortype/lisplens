@@ -31,6 +31,12 @@ pub struct FormatConfig {
     /// `:inner`/`:block` style. Enabled by a `clojure-ts-indent-style: fixed`
     /// file-/dir-local, or the `--tonsky` CLI flag. Ignored by the other engines.
     pub clojure_fixed_indent: bool,
+    /// ISLisp only (ADR-0042): use the opt-in **EISL** (Easy-ISLisp) indent style
+    /// — a corpus-induced table where special heads body-indent at `open + 4` and
+    /// everything else aligns under arg 0. Off by default, so plain ISLisp rides
+    /// the generic fallback; enabled by an `islisp-indent-style: eisl` file-/dir-local
+    /// or the `--dialect islisp-eisl` CLI form. Ignored by every other dialect.
+    pub islisp_eisl: bool,
 }
 
 impl Default for FormatConfig {
@@ -42,6 +48,7 @@ impl Default for FormatConfig {
             comment_column: 40,
             nameless: false,
             clojure_fixed_indent: false,
+            islisp_eisl: false,
         }
     }
 }
@@ -89,6 +96,12 @@ fn set_var(cfg: &mut FormatConfig, var: &str, val: &str) {
         "clojure-ts-indent-style" => match val.trim().trim_matches('\'') {
             "fixed" => cfg.clojure_fixed_indent = true,
             "semantic" => cfg.clojure_fixed_indent = false,
+            _ => {}
+        },
+        // ISLisp style selector (ADR-0042): `eisl` opts into the Easy-ISLisp table.
+        "islisp-indent-style" => match val.trim().trim_matches('\'') {
+            "eisl" => cfg.islisp_eisl = true,
+            "standard" => cfg.islisp_eisl = false,
             _ => {}
         },
         _ => {}
@@ -432,6 +445,19 @@ mod tests {
         // A quoted symbol value (`'fixed`) is accepted too.
         set_var(&mut c, "clojure-ts-indent-style", "'fixed");
         assert!(c.clojure_fixed_indent);
+    }
+
+    #[test]
+    fn islisp_indent_style_selects_eisl() {
+        let mut c = FormatConfig::default();
+        assert!(!c.islisp_eisl, "off by default (plain ISLisp = fallback)");
+        set_var(&mut c, "islisp-indent-style", "eisl");
+        assert!(c.islisp_eisl);
+        set_var(&mut c, "islisp-indent-style", "standard");
+        assert!(!c.islisp_eisl);
+        // A quoted symbol value (`'eisl`) is accepted too.
+        set_var(&mut c, "islisp-indent-style", "'eisl");
+        assert!(c.islisp_eisl);
     }
 
     #[test]
