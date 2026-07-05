@@ -28,7 +28,13 @@ columns via `Nameless::saving`, the parinfer-rust-emacs pain point). Smart mode 
 editor integration are deferred. New safety model (balance-generating: success =
 clean/balanced output, failure = input returned unchanged + positioned diagnostic)
 gets its own ADR alongside ADR-0005. Serial deps #24 → #25 → #26; all
-`ready-for-agent`. Currently starting **#24**.
+`ready-for-agent`. **#24 shipped** (PR #27, merged `e36f085`): the subcommand + paren
+mode + MCP tool + ADR-0045. **#25 shipped** (this branch): indent mode — a tolerant
+`lex()` token scan that infers close-paren placement from indentation (own `col_at`
+display-width columns), balance-generating, with unterminated-string / eol-backslash /
+mid-line-unmatched-close refusals; indentation is never rewritten. **Next: #26** —
+Nameless-aware indent-mode column *interpretation* (subtract `Nameless::saving` when
+reading indentation columns), the parinfer-rust-emacs pain-point fix.
 
 **0.3.0 shipped** — see the "Released 0.3.0" bullet under **Now** for the summary.
 crates.io + GitHub Release (5-platform binaries) both live and verified. The
