@@ -233,8 +233,11 @@ Shipped a native ISLisp engine as an **induced table on the shared Clojure engin
 special-set → `[:inner 0]` + align-under-arg-0 default + body width 4 — the exact
 Emacs-family shape edlis's `calc_tabs` uses. The special set is edlis's `special[]`
 plus the corpus-attested body forms it omits (`defmethod`/`dolist`/`lambda`/…);
-`if`/`cond`/`for`/`when` stay aligning. Reached via `--dialect islisp` (`.lsp` default
-stays Common Lisp). A golden test locks edlis's model.
+`if`/`cond`/`for`/`when` stay aligning. Shipped as an **opt-in style** (the
+cross-implementation check below showed EISL's rule is one community's, not universal
+ISLisp): reached via `--dialect islisp-eisl` or an `islisp-indent-style: eisl`
+file-local, while plain `--dialect islisp` keeps the generic fallback and the `.lsp`
+default stays Common Lisp. A golden test locks edlis's model.
 
 **The decisive number:** on EISL-native sources (`library`/`example`/`verify`/`tests`)
 the induced engine matches **75.2%** of code-line indentation vs **54.2%** for the old
