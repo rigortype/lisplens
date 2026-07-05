@@ -78,6 +78,24 @@ not emitted. Two renderings from the one tree:
   children are omitted, but each emitted node keeps its child **index** so a
   renderer can place it and show elision.
 
+## Deep view of added / removed definitions (#44)
+
+`diff --deep` / `--unit` only *tree-diffs* **changed** definitions — an added or
+removed definition has no counterpart to align against. But naming them alone
+left the biggest coverage gap: a controlled experiment (raw `git diff` vs this
+structural diff, summarizing `cc-engine.el` emacs-30 → emacs-31 across three
+models) found the structural diff lost coverage almost entirely on the
+*body-internal* detail of **added** definitions the raw diff exposes. So deep
+mode also renders each added/removed definition as its expandable **Lens**
+(ADR-0013) — the `expand` view: the form's subtree in pre-order, one node per
+line with an anchor + preview. This is deliberately the Lens, **not** verbatim
+source: previews keep it token-bounded (the whole point of the structural diff
+over a raw diff), and every node is a real edit anchor an agent can drill.
+Full-verbatim added bodies stay a possible `--verbose` opt-in, not the default.
+`diff_files_deep` returns a `DeepDiff { changed, added, removed }`; JSON tags
+each entry `changed`/`added`/`removed` and carries the Lens nodes on the latter
+two.
+
 ## Non-goals (documented, tested)
 
 - **Moves / reorders / tree-edit-distance are out of scope.** A reordered subform
