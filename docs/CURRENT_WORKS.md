@@ -14,6 +14,22 @@ Fennel/Janet/Hy/LFE (ADR-0043), and the **agent-skill line** — the in-repo
 (ADR-0044, function-like + Elisp variable, CLI + MCP) and structural
 `insert-after`/`insert-before` on any node. Nothing is in flight.
 
+**Next up — parinfer-alternative `parinfer` command (issues #24–26).** A grilling
+session pinned the spec: lisplens gains its *own* parinfer-style capability (not an
+integration with `parinfer-rust`/`parinfer-rust-emacs`, and **no** API compat with
+`parinfer.js`), built on the existing toolset (faithful indenter, Nameless model,
+lispexp `lex()` tolerant tiling). Decisions: stateless whole-buffer transform;
+subcommand `lisplens parinfer <mode>` (CLI) + MCP tool; I/O is stdin→stdout with
+`--json` structured result, `--dialect` (default elisp), cursor position-tracking
+only, `--nameless`/`--name` (Elisp-only overlay). Modes: **Paren** (tracer:
+balance-checked faithful reindent) → **Indent** (the flagship: paren-trail inference
+via `lex()`) → **Nameless-aware Indent** (the headline fix — reads *displayed*
+columns via `Nameless::saving`, the parinfer-rust-emacs pain point). Smart mode and
+editor integration are deferred. New safety model (balance-generating: success =
+clean/balanced output, failure = input returned unchanged + positioned diagnostic)
+gets its own ADR alongside ADR-0005. Serial deps #24 → #25 → #26; all
+`ready-for-agent`. Currently starting **#24**.
+
 **0.3.0 shipped** — see the "Released 0.3.0" bullet under **Now** for the summary.
 crates.io + GitHub Release (5-platform binaries) both live and verified. The
 published crate now also excludes the developer-facing ADRs (`/docs/adr`) and the
