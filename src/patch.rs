@@ -308,6 +308,8 @@ fn full_line_span(source: &str, index: &LineIndex, n: u32) -> std::ops::Range<us
 enum SVerb {
     Replace,
     Delete,
+    InsertAfter,
+    InsertBefore,
     Wrap,
     Raise,
     Splice,
@@ -357,6 +359,8 @@ pub fn parse_struct_patch(input: &str) -> Result<StructPatch, PatchError> {
         let verb = match tokens.next() {
             Some("replace") => SVerb::Replace,
             Some("delete") => SVerb::Delete,
+            Some("insert-after") => SVerb::InsertAfter,
+            Some("insert-before") => SVerb::InsertBefore,
             Some("wrap") => SVerb::Wrap,
             Some("raise") => SVerb::Raise,
             Some("splice") => SVerb::Splice,
@@ -378,7 +382,7 @@ pub fn parse_struct_patch(input: &str) -> Result<StructPatch, PatchError> {
         let mut anchor2 = None;
         let mut rename = None;
         match verb {
-            SVerb::Replace | SVerb::Wrap => {
+            SVerb::Replace | SVerb::Wrap | SVerb::InsertAfter | SVerb::InsertBefore => {
                 let tag = tokens
                     .next()
                     .and_then(|t| t.strip_prefix("<<"))
@@ -515,6 +519,8 @@ fn build_struct_edits(
             range: span,
             text: String::new(),
         }],
+        SVerb::InsertAfter => st::insert_after(node, op.text.as_deref().unwrap_or_default()),
+        SVerb::InsertBefore => st::insert_before(node, op.text.as_deref().unwrap_or_default()),
         SVerb::Wrap => st::wrap(node, op.text.as_deref().unwrap_or_default()),
         SVerb::Raise => {
             let parent = located
@@ -674,6 +680,42 @@ mod tests {
             "(defun a ()\n  (when c\n    (foo)\n    (bar)))\n(defun b ()\n  (y))\n"
         );
         assert_eq!(out.new_file_hash, file_hash(written.as_bytes()));
+    }
+
+    #[test]
+    fn struct_insert_after_an_inner_node_adds_inside_the_form() {
+        // Anchoring insert-after at an inner node (a defun's arglist) inserts a
+        // new sibling *inside* the form — the case that used to be a BadOp.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.el");
+        let source = "(defun f (x)\n  (+ x 1))\n";
+        std::fs::write(&path, source).unwrap();
+        let fh = file_hash(source.as_bytes());
+        let h = anchor_hash("(x)".as_bytes());
+        let patch =
+            parse_struct_patch(&format!("@ {fh}\ninsert-after 1:{h} <<D\n\"Doc.\"\nD\n")).unwrap();
+        apply_struct_patch(&path, &patch, Dialect::EmacsLisp).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "(defun f (x)\n  \"Doc.\"\n  (+ x 1))\n"
+        );
+    }
+
+    #[test]
+    fn struct_insert_before_a_body_form() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("b.el");
+        let source = "(defun g ()\n  (bar))\n";
+        std::fs::write(&path, source).unwrap();
+        let fh = file_hash(source.as_bytes());
+        let h = anchor_hash("(bar)".as_bytes());
+        let patch =
+            parse_struct_patch(&format!("@ {fh}\ninsert-before 2:{h} <<P\n(foo)\nP\n")).unwrap();
+        apply_struct_patch(&path, &patch, Dialect::EmacsLisp).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "(defun g ()\n  (foo)\n  (bar))\n"
+        );
     }
 
     #[test]
