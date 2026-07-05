@@ -38,20 +38,27 @@ not a replacement of it.
   so the new line lands at the right column, others stay verbatim (ADR-0027).
 - **Replace** when one exists: replace the existing docstring datum's span.
 
+**v2 — Elisp variable definitions** (`defvar`, `defvar-local`, `defconst`,
+`defconstant`, `defcustom`, `defparameter`). The docstring follows the *value*
+form (`(defvar x VALUE "doc" …)`), so the slot is the element after the value and
+an existing string there is the docstring (no lone-string ambiguity — the value
+is separate). `defcustom`'s trailing `:keyword` args are preserved (the docstring
+is inserted before them).
+
 Refusals (no partial write, ADR-0005 spirit): `name` not found; defined more than
-once (ambiguous); defined only as a variable/value (`defvar`/`defcustom`/`define
-name value`) — reported as "v1 covers function-like definitions" rather than
-guessing the variable docstring slot; empty stdin.
+once (ambiguous); a variable declared with **no value** (`(defvar x)`) — no slot
+to attach after (`NoValue`); a definition with no docstring convention such as a
+Scheme `(define name value)` (`NoDocstringSlot`); empty stdin.
 
 ## Consequences
 
 - Closes the last of the three benchmark shapes; the skill can teach `docstring`
   alongside `rename`/`inline` instead of the `replace`-the-whole-form workaround,
   and the `insert-*`-into-a-form `BadOp` friction stops mattering for this case.
-- **Variable docstrings** (`defvar`/`defconst`/`defcustom`/`defparameter`, slot =
-  after the value form) are a deliberate v2 — the slot and the "no value present"
-  edge (`(defvar x)`) want their own decision. v1 refuses them with a clear
-  reason rather than shipping a shaky guess.
+- Function-like and Elisp variable definitions are both covered. Scheme/Clojure
+  *value* definitions (`(define name value)`, `def`) have no docstring slot and
+  are refused; a metadata/attribute-map convention for them could be a later
+  extension, but is out of scope here.
 - No new edit machinery: it is a span→edit composition over `edit`/`format`/
   `write` like every other member, and reuses the definition-classification shape
   from `refactor.rs`.
