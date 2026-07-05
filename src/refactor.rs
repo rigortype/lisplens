@@ -477,6 +477,227 @@ fn parse_params_from<'a>(items: &'a [Datum<'a>]) -> Result<Vec<&'a str>, String>
     Ok(params)
 }
 
+// ===== docstring: set/replace a definition's docstring (ADR-0044) =====
+
+/// Whether a docstring was inserted (none before) or replaced an existing one.
+#[derive(Debug, PartialEq, Eq)]
+pub enum DocstringAction {
+    Inserted,
+    Replaced,
+}
+
+/// The result of a successful [`set_docstring_in_file`].
+#[derive(Debug)]
+pub struct DocstringOutcome {
+    pub action: DocstringAction,
+    pub new_file_hash: String,
+}
+
+/// Why setting a docstring was refused. No partial write ever happens on error.
+#[derive(Debug)]
+pub enum DocstringError {
+    /// No function-like definition of `name` was found.
+    NotFound(String),
+    /// `name` is defined by more than one function-like form.
+    Ambiguous(String),
+    /// `name` is defined only as a variable/value; v1 covers function-like defs.
+    NotAFunction(String),
+    /// The docstring text was empty.
+    EmptyText,
+    Splice(SpliceError),
+    Write(WriteError),
+    Io(std::io::Error),
+}
+
+impl std::fmt::Display for DocstringError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DocstringError::NotFound(s) => write!(f, "no function-like definition of `{s}`"),
+            DocstringError::Ambiguous(s) => write!(f, "`{s}` is defined more than once"),
+            DocstringError::NotAFunction(s) => write!(
+                f,
+                "`{s}` is a variable/value; docstring v1 covers function-like definitions"
+            ),
+            DocstringError::EmptyText => write!(f, "docstring text is empty"),
+            DocstringError::Splice(e) => write!(f, "splice failed: {e:?}"),
+            DocstringError::Write(e) => write!(f, "{e:?}"),
+            DocstringError::Io(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+/// Escape `text` into a Lisp string literal (quote `\` and `"`; newlines stay
+/// literal, which is valid in a multi-line docstring).
+fn string_literal(text: &str) -> String {
+    let mut s = String::with_capacity(text.len() + 2);
+    s.push('"');
+    for c in text.chars() {
+        match c {
+            '\\' => s.push_str("\\\\"),
+            '"' => s.push_str("\\\""),
+            _ => s.push(c),
+        }
+    }
+    s.push('"');
+    s
+}
+
+/// The docstring slot of a function-like definition of `name`: the byte offset
+/// just after the argument list (the insertion point), and the datum currently
+/// occupying the docstring position if one is present.
+struct DocSlot<'a> {
+    after_arglist: usize,
+    existing: Option<&'a Datum<'a>>,
+}
+
+/// Locate the docstring slot of a function-like definition of `name` in `form`.
+/// `Some(Ok(slot))` — a function-like def of `name`; `Some(Err(()))` — it defines
+/// `name` but as a variable/value (unsupported in v1); `None` — unrelated form.
+fn doc_slot<'a>(form: &'a Datum<'a>, name: &str) -> Option<Result<DocSlot<'a>, ()>> {
+    const FN_DEFS: &[&str] = &[
+        "defun",
+        "defsubst",
+        "defmacro",
+        "cl-defun",
+        "cl-defsubst",
+        "cl-defmacro",
+    ];
+    const VAR_DEFS: &[&str] = &[
+        "defvar",
+        "defvar-local",
+        "defconst",
+        "defconstant",
+        "defcustom",
+        "defparameter",
+    ];
+    let DatumKind::List { items, .. } = &form.kind else {
+        return None;
+    };
+    let head = as_sym(items.first()?)?;
+
+    if FN_DEFS.contains(&head) {
+        if as_sym(items.get(1)?) != Some(name) {
+            return None;
+        }
+        // `(head name ARGLIST slot rest…)`
+        let arglist = items.get(2)?;
+        let after_arglist = arglist.span.end as usize;
+        let existing = docstring_at(items, 3);
+        return Some(Ok(DocSlot {
+            after_arglist,
+            existing,
+        }));
+    }
+    if head == "define" || head == "define*" {
+        return match &items.get(1)?.kind {
+            // `(define (name params…) slot rest…)`
+            DatumKind::List { items: sig, .. } => {
+                if sig.first().and_then(as_sym) != Some(name) {
+                    return None;
+                }
+                let sig_node = &items[1];
+                let after_arglist = sig_node.span.end as usize;
+                let existing = docstring_at(items, 2);
+                Some(Ok(DocSlot {
+                    after_arglist,
+                    existing,
+                }))
+            }
+            DatumKind::Symbol(s) if *s == name => Some(Err(())),
+            _ => None,
+        };
+    }
+    if VAR_DEFS.contains(&head) {
+        return (as_sym(items.get(1)?) == Some(name)).then_some(Err(()));
+    }
+    None
+}
+
+/// The existing docstring at body index `idx` in `items`: a string is a docstring
+/// only when it is *not* the sole body form (mirrors `finish_body`, ADR-0032) —
+/// a lone string body is a return value, so a docstring is inserted before it.
+fn docstring_at<'a>(items: &'a [Datum<'a>], idx: usize) -> Option<&'a Datum<'a>> {
+    let cand = items.get(idx)?;
+    let is_last = idx + 1 >= items.len();
+    (matches!(cand.kind, DatumKind::Str(_)) && !is_last).then_some(cand)
+}
+
+/// Set (or replace) the docstring of the function-like definition of `name` in
+/// `path`, from raw `text` (ADR-0044). Escapes `text` into a string literal,
+/// inserts it after the argument list (or replaces the existing docstring), then
+/// runs the standard pipeline: splice → native reindent → validate-then-write.
+pub fn set_docstring_in_file(
+    path: &Path,
+    name: &str,
+    text: &str,
+    dialect: Dialect,
+) -> Result<DocstringOutcome, DocstringError> {
+    let text = text.strip_suffix('\n').unwrap_or(text);
+    if text.is_empty() {
+        return Err(DocstringError::EmptyText);
+    }
+    let source = std::fs::read_to_string(path).map_err(DocstringError::Io)?;
+    let options = Options::for_dialect(dialect);
+    let parsed = parse(&source, &options);
+
+    let mut slots = Vec::new();
+    let mut saw_variable = false;
+    for datum in &parsed.data {
+        match doc_slot(datum, name) {
+            Some(Ok(slot)) => slots.push(slot),
+            Some(Err(())) => saw_variable = true,
+            None => {}
+        }
+    }
+    let slot = match slots.len() {
+        1 => slots.pop().unwrap(),
+        0 if saw_variable => return Err(DocstringError::NotAFunction(name.to_string())),
+        0 => return Err(DocstringError::NotFound(name.to_string())),
+        _ => return Err(DocstringError::Ambiguous(name.to_string())),
+    };
+
+    let literal = string_literal(text);
+    let (edit, action) = match slot.existing {
+        Some(doc) => (
+            Edit {
+                range: doc.span.start as usize..doc.span.end as usize,
+                text: literal,
+            },
+            DocstringAction::Replaced,
+        ),
+        None => (
+            Edit {
+                range: slot.after_arglist..slot.after_arglist,
+                text: format!("\n  {literal}"),
+            },
+            DocstringAction::Inserted,
+        ),
+    };
+
+    let expected = file_hash(source.as_bytes());
+    let (spliced, spans) = splice_tracked(&source, vec![edit]).map_err(DocstringError::Splice)?;
+    let new_content = if has_native_engine(dialect) {
+        let config = crate::config::resolve(path, &spliced);
+        reindent(
+            &spliced,
+            &config,
+            dialect,
+            None,
+            Touched {
+                expand: &spans,
+                exact: &[],
+            },
+        )
+    } else {
+        spliced
+    };
+    verify_and_write(path, &expected, &new_content, &options).map_err(DocstringError::Write)?;
+    Ok(DocstringOutcome {
+        action,
+        new_file_hash: file_hash(new_content.as_bytes()),
+    })
+}
+
 // ===== rewrite: structural pattern -> template (ADR-0033) =====
 
 /// The result of a successful [`rewrite_in_file`].
@@ -2626,5 +2847,56 @@ mod tests {
             Err(ExtractError::NotGeneralizable(_))
         ));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "(g x)\n");
+    }
+
+    // ----- docstring (ADR-0044) -----
+
+    #[test]
+    fn docstring_inserts_when_absent() {
+        let (_d, p) = write_temp("a.el", "(defun f (x)\n  (+ x 1))\n");
+        let o = set_docstring_in_file(&p, "f", "Add one to X.", Dialect::EmacsLisp).unwrap();
+        assert_eq!(o.action, DocstringAction::Inserted);
+        let r = std::fs::read_to_string(&p).unwrap();
+        assert!(r.contains("\n  \"Add one to X.\"\n"), "{r}");
+        assert!(r.contains("(+ x 1)"), "{r}");
+    }
+
+    #[test]
+    fn docstring_replaces_and_escapes() {
+        let (_d, p) = write_temp("a.el", "(defsubst f (x)\n  \"Old.\"\n  (+ x 1))\n");
+        let o = set_docstring_in_file(&p, "f", "New \"quoted\" doc.", Dialect::EmacsLisp).unwrap();
+        assert_eq!(o.action, DocstringAction::Replaced);
+        let r = std::fs::read_to_string(&p).unwrap();
+        assert!(r.contains("\"New \\\"quoted\\\" doc.\""), "{r}");
+        assert!(!r.contains("Old."), "{r}");
+    }
+
+    #[test]
+    fn docstring_inserts_before_lone_string_body() {
+        // A lone string body is a return value, not a docstring: insert before it.
+        let (_d, p) = write_temp("a.el", "(defun f () \"ret\")\n");
+        set_docstring_in_file(&p, "f", "Doc.", Dialect::EmacsLisp).unwrap();
+        let r = std::fs::read_to_string(&p).unwrap();
+        assert!(r.contains("\"Doc.\""), "{r}");
+        assert!(r.contains("\"ret\""), "{r}"); // return value kept
+    }
+
+    #[test]
+    fn docstring_refuses_variable_missing_and_empty() {
+        let src = "(defvar v 0 \"vd\")\n(defun f () 1)\n";
+        let (_d, p) = write_temp("a.el", src);
+        assert!(matches!(
+            set_docstring_in_file(&p, "v", "x", Dialect::EmacsLisp),
+            Err(DocstringError::NotAFunction(_))
+        ));
+        assert!(matches!(
+            set_docstring_in_file(&p, "ghost", "x", Dialect::EmacsLisp),
+            Err(DocstringError::NotFound(_))
+        ));
+        assert!(matches!(
+            set_docstring_in_file(&p, "f", "", Dialect::EmacsLisp),
+            Err(DocstringError::EmptyText)
+        ));
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), src); // untouched on refusal
     }
 }
