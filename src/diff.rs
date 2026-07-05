@@ -20,7 +20,7 @@ use lispexp::{parse, Datum, DatumKind, Options};
 
 use crate::hash::anchor_hash;
 use crate::sexpr::{opt_eq, struct_eq};
-use crate::{dispatch_signature, name_text, span_bytes, Dialect};
+use crate::{dispatch_signature, name_text, node_lens, span_bytes, Dialect, NodeEntry};
 
 /// How a definition unit differs between the two versions. `Unchanged` units are
 /// not emitted (see [`FileDiff::units`]).
@@ -567,30 +567,65 @@ pub struct UnitTreeDiff {
     pub diff: FormDiff,
 }
 
-/// Deep diff (ADR-0048): for every *changed* definition (optionally filtered to a
-/// `name`), the intra-unit [`FormDiff`]. Added/removed units carry no tree diff
-/// and are not included here — [`diff_files`] reports those.
-pub fn diff_files_deep(
-    old: &str,
-    new: &str,
-    dialect: Dialect,
-    name: Option<&str>,
-) -> Vec<UnitTreeDiff> {
+/// An added or removed definition rendered as its expandable **Lens** (#44): the
+/// definition's subtree in pre-order with an anchor + preview per node, so an
+/// agent reading a deep diff can see *what a new/gone definition contains* — not
+/// just its name — while staying token-conscious (previews, not verbatim source).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnitLens {
+    /// The defining head symbol (e.g. `defun`).
+    pub kind: String,
+    /// The defined name.
+    pub name: String,
+    /// A method's Dispatch signature, or `None`.
+    pub signature: Option<String>,
+    /// Start line of the definition (new side for added, old side for removed).
+    pub line: u32,
+    /// Anchor hash of the definition form (same side as `line`).
+    pub hash: String,
+    /// The definition's expandable Lens (ADR-0013): node per line, `depth` 0 is
+    /// the definition itself.
+    pub lens: Vec<NodeEntry>,
+}
+
+/// The result of [`diff_files_deep`] (ADR-0048, #44): changed definitions with
+/// their intra-unit tree diff, plus added/removed definitions with their Lens.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeepDiff {
+    /// Changed definitions and how their bodies changed.
+    pub changed: Vec<UnitTreeDiff>,
+    /// Added definitions (new side) with their Lens.
+    pub added: Vec<UnitLens>,
+    /// Removed definitions (old side) with their Lens.
+    pub removed: Vec<UnitLens>,
+}
+
+impl DeepDiff {
+    /// Whether nothing changed at the definition level.
+    pub fn is_empty(&self) -> bool {
+        self.changed.is_empty() && self.added.is_empty() && self.removed.is_empty()
+    }
+}
+
+/// Deep diff (ADR-0048, #44): for every *changed* definition the intra-unit
+/// [`FormDiff`], and for every *added*/*removed* definition its expandable Lens —
+/// all optionally filtered to a `name`. So a deep view shows both how changed
+/// definitions changed *and* what added/removed ones contain.
+pub fn diff_files_deep(old: &str, new: &str, dialect: Dialect, name: Option<&str>) -> DeepDiff {
     let old_parsed = parse(old, &Options::for_dialect(dialect));
     let new_parsed = parse(new, &Options::for_dialect(dialect));
     let (old_units, _) = collect_units(old, &old_parsed.data, dialect);
     let (new_units, _) = collect_units(new, &new_parsed.data, dialect);
     let matched = match_units(&old_units, &new_units);
+    let wanted = |u: &Unit| name.is_none_or(|want| u.key.1 == want);
 
-    let mut out = Vec::new();
+    let mut changed = Vec::new();
     for (ou, nu) in &matched.changed {
-        if let Some(want) = name {
-            if nu.key.1 != want {
-                continue;
-            }
+        if !wanted(nu) {
+            continue;
         }
         if let Some(diff) = diff_forms(ou.form, nu.form, old, new) {
-            out.push(UnitTreeDiff {
+            changed.push(UnitTreeDiff {
                 kind: nu.key.0.clone(),
                 name: nu.key.1.clone(),
                 signature: nu.key.2.clone(),
@@ -600,8 +635,36 @@ pub fn diff_files_deep(
             });
         }
     }
-    out.sort_by_key(|u| u.line);
-    out
+    changed.sort_by_key(|u| u.line);
+
+    let lens_of = |u: &Unit, src: &str| UnitLens {
+        kind: u.key.0.clone(),
+        name: u.key.1.clone(),
+        signature: u.key.2.clone(),
+        line: u.line,
+        hash: u.hash.clone(),
+        lens: node_lens(src, u.form),
+    };
+    let mut added: Vec<UnitLens> = matched
+        .added
+        .iter()
+        .filter(|u| wanted(u))
+        .map(|u| lens_of(u, new))
+        .collect();
+    added.sort_by_key(|u| u.line);
+    let mut removed: Vec<UnitLens> = matched
+        .removed
+        .iter()
+        .filter(|u| wanted(u))
+        .map(|u| lens_of(u, old))
+        .collect();
+    removed.sort_by_key(|u| u.line);
+
+    DeepDiff {
+        changed,
+        added,
+        removed,
+    }
 }
 
 /// Parse two source snippets each as a single form and diff them (ADR-0048's
@@ -724,32 +787,65 @@ fn child_diff_json(child: &ChildDiff) -> serde_json::Value {
     }
 }
 
-/// Render a deep diff ([`diff_files_deep`]) as text: each changed unit's header
-/// followed by its pruned tree.
-pub fn deep_text(units: &[UnitTreeDiff]) -> String {
+fn sig_suffix(signature: &Option<String>) -> String {
+    signature
+        .as_deref()
+        .map(|s| format!(" {s}"))
+        .unwrap_or_default()
+}
+
+/// Render a deep diff ([`diff_files_deep`]) as text: changed definitions with
+/// their pruned tree, then added / removed definitions with their Lens (#44).
+pub fn deep_text(diff: &DeepDiff) -> String {
     let mut out = String::new();
-    for u in units {
-        let sig = u
-            .signature
-            .as_deref()
-            .map(|s| format!(" {s}"))
-            .unwrap_or_default();
+    for u in &diff.changed {
         out.push_str(&format!(
-            "~ {} {}{sig}  {}:{}\n",
-            u.kind, u.name, u.line, u.hash
+            "~ {} {}{}  {}:{}\n",
+            u.kind,
+            u.name,
+            sig_suffix(&u.signature),
+            u.line,
+            u.hash
         ));
         out.push_str(&form_diff_text(&u.diff));
     }
+    let mut lens_section = |marker: char, units: &[UnitLens]| {
+        for u in units {
+            out.push_str(&format!(
+                "{marker} {} {}{}  {}:{}\n",
+                u.kind,
+                u.name,
+                sig_suffix(&u.signature),
+                u.line,
+                u.hash
+            ));
+            // Skip depth 0 (the definition itself, already in the header); show
+            // its inner Lens indented.
+            for node in u.lens.iter().skip(1) {
+                out.push_str(&format!(
+                    "{}{}  {}\n",
+                    "  ".repeat(node.depth as usize),
+                    node.hash,
+                    node.preview
+                ));
+            }
+        }
+    };
+    lens_section('+', &diff.added);
+    lens_section('-', &diff.removed);
     out
 }
 
-/// Render a deep diff ([`diff_files_deep`]) as a JSON array of unit nodes.
-pub fn deep_json(units: &[UnitTreeDiff]) -> serde_json::Value {
+/// Render a deep diff ([`diff_files_deep`]) as JSON: `{changed, added, removed}`,
+/// where added/removed carry their Lens nodes (#44).
+pub fn deep_json(diff: &DeepDiff) -> serde_json::Value {
     use serde_json::json;
-    units
+    let changed: Vec<_> = diff
+        .changed
         .iter()
         .map(|u| {
             json!({
+                "status": "changed",
                 "kind": u.kind,
                 "name": u.name,
                 "signature": u.signature,
@@ -758,7 +854,30 @@ pub fn deep_json(units: &[UnitTreeDiff]) -> serde_json::Value {
                 "diff": form_diff_json(&u.diff),
             })
         })
-        .collect()
+        .collect();
+    let lens_arr = |status: &str, units: &[UnitLens]| -> Vec<serde_json::Value> {
+        units
+            .iter()
+            .map(|u| {
+                json!({
+                    "status": status,
+                    "kind": u.kind,
+                    "name": u.name,
+                    "signature": u.signature,
+                    "line": u.line,
+                    "hash": u.hash,
+                    "lens": u.lens.iter().map(|n| json!({
+                        "line": n.line, "depth": n.depth, "hash": n.hash, "preview": n.preview,
+                    })).collect::<Vec<_>>(),
+                })
+            })
+            .collect()
+    };
+    json!({
+        "changed": changed,
+        "added": lens_arr("added", &diff.added),
+        "removed": lens_arr("removed", &diff.removed),
+    })
 }
 
 #[cfg(test)]
@@ -928,10 +1047,10 @@ mod tests {
         let old = "(defun g (x) (+ x 1))\n";
         let new = "(defun g (x) (+ x 2))\n";
         let deep = diff_files_deep(old, new, Dialect::EmacsLisp, None);
-        assert_eq!(deep.len(), 1);
-        assert_eq!(deep[0].name, "g");
+        assert_eq!(deep.changed.len(), 1);
+        assert_eq!(deep.changed[0].name, "g");
         // The 1 -> 2 replace is somewhere in the tree; the text renders it.
-        let text = form_diff_text(&deep[0].diff);
+        let text = form_diff_text(&deep.changed[0].diff);
         assert!(text.contains("1 ⇒ 2"), "rendered tree:\n{text}");
     }
 
@@ -939,10 +1058,54 @@ mod tests {
     fn deep_diff_unit_filter() {
         let old = "(defun a () 1)\n(defun b () 2)\n";
         let new = "(defun a () 10)\n(defun b () 20)\n";
-        assert_eq!(diff_files_deep(old, new, Dialect::EmacsLisp, None).len(), 2);
+        assert_eq!(
+            diff_files_deep(old, new, Dialect::EmacsLisp, None)
+                .changed
+                .len(),
+            2
+        );
         let only_b = diff_files_deep(old, new, Dialect::EmacsLisp, Some("b"));
-        assert_eq!(only_b.len(), 1);
-        assert_eq!(only_b[0].name, "b");
+        assert_eq!(only_b.changed.len(), 1);
+        assert_eq!(only_b.changed[0].name, "b");
+    }
+
+    #[test]
+    fn deep_diff_renders_added_and_removed_bodies() {
+        // #44: an added definition carries its Lens (inner nodes with previews),
+        // not just its name; likewise a removed one.
+        let old = "(defun gone (x) (* x 2))\n";
+        let new = "(defun fresh (n) (let ((r (+ n 1))) (message \"%s\" r)))\n";
+        let deep = diff_files_deep(old, new, Dialect::EmacsLisp, None);
+        assert!(deep.changed.is_empty());
+        assert_eq!(deep.added.len(), 1);
+        assert_eq!(deep.removed.len(), 1);
+        let added = &deep.added[0];
+        assert_eq!(added.name, "fresh");
+        // The Lens has more than the definition node alone — it exposes the body.
+        assert!(
+            added.lens.len() > 1,
+            "added definition should carry its inner Lens"
+        );
+        // The body content is visible via previews.
+        let text = deep_text(&deep);
+        assert!(text.contains("+ defun fresh"), "text:\n{text}");
+        assert!(text.contains("- defun gone"), "text:\n{text}");
+        assert!(
+            text.contains("message"),
+            "added body preview missing:\n{text}"
+        );
+        // Every Lens node carries a usable anchor hash.
+        assert!(added.lens.iter().all(|n| n.hash.len() == 4));
+    }
+
+    #[test]
+    fn deep_diff_unit_filter_matches_added() {
+        let old = "(defun keep () 1)\n";
+        let new = "(defun keep () 1)\n(defun brand-new () 42)\n";
+        let only = diff_files_deep(old, new, Dialect::EmacsLisp, Some("brand-new"));
+        assert!(only.changed.is_empty() && only.removed.is_empty());
+        assert_eq!(only.added.len(), 1);
+        assert_eq!(only.added[0].name, "brand-new");
     }
 
     #[test]

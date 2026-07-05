@@ -205,6 +205,15 @@ pub fn expand(source: &str, dialect: Dialect, name: &str) -> Vec<NodeEntry> {
     out
 }
 
+/// The expandable Lens of one already-parsed node (ADR-0013): its subtree in
+/// pre-order with an anchor hash and preview each, `datum` itself at depth 0.
+/// Shared with the Structural diff's deep view of an added/removed definition.
+pub(crate) fn node_lens(source: &str, datum: &Datum) -> Vec<NodeEntry> {
+    let mut out = Vec::new();
+    walk_node(source, datum, 0, &mut out);
+    out
+}
+
 fn walk_node(source: &str, datum: &Datum, depth: u32, out: &mut Vec<NodeEntry>) {
     out.push(NodeEntry {
         line: datum.line,

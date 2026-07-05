@@ -4,11 +4,41 @@ Ephemeral snapshot. **Durable knowledge is in the dev docs** (see `AGENTS.md` �
 Codebase): `docs/dev/architecture.md`, `docs/dev/formatter.md`, `CONTEXT.md`,
 `docs/adr/`.
 
-## Handoff — resume here: 0.4.0 released; parinfer line is an experimental preview
+## Handoff — resume here: Structural diff landed (unreleased); next is #42 (graphical) or a release
 
-**Where.** On **`master`**, clean, at the release commit `de78901` (merge of PR #38,
-tagged **`v0.4.0`**). crates.io + the 5-platform GitHub Release binaries are live and
-verified (see the "Released 0.4.0" bullet under **Now**).
+**Where.** On **`master`**, clean, at `c8cacf8` (merge of PR #43). The **Structural
+diff** feature is in but **not yet released** — a `[Unreleased]` CHANGELOG entry is
+staged for the next version bump.
+
+**What just shipped — the Structural diff arc (#39–#41, PR #43).** A `diff` command +
+MCP `diff` tool that compares two versions of a Lisp file *modulo formatting*, so an
+agent sees how a definition's logic changed. Two levels: **definition-level attention
+map** (`diff <old> <new>`, ADR-0047 — added/removed/changed, keyed
+`(kind, name, dispatch?)`, changed iff not `struct_eq`) and the **intra-unit tree diff**
+(`diff --deep` / `--unit NAME`, ADR-0048 — struct_eq-LCS child alignment + positional gap
+pairing, category-gated recursion with the head as child 0, four statuses, pruned-tree
+text + JSON with editing anchors). The MCP tool adds a form-snippet mode
+(`oldForm`/`newForm`) — the general two-form primitive. New glossary term **Structural
+diff** in `CONTEXT.md`; `struct_eq`/`opt_eq` lifted into a shared `src/sexpr.rs` (#39).
+Verified on `cc-engine.el` emacs-30 → emacs-31 (53 changed / 13 added / 2 removed). A
+duplicate-key bug (Emacs's `(defvar x)` forward-decl + `(defvar x nil)` mispaired,
+phantom self-diff changes) was found and fixed with a regression test. 231 tests.
+
+**Next up — #42, the graphical view (deferred, open).** The staged HTML/SVG visualization
+of a unit's structural diff, consuming ADR-0048's JSON DiffTree — the "human eyeball"
+half of the two-level plan. Nothing blocks it. Alternatively, cut a release to ship the
+diff feature (the `[Unreleased]` entry is ready).
+
+**The other open thread (unchanged): verify parinfer on real Emacs.** The Emacs companion
+`emacs/lisplens-parinfer.el` (0.4.0 preview) is byte-compile-clean and batch-smoke-tested
+but **not yet exercised in an interactive Emacs session** — the gate before the parinfer
+line can be declared stable and announced in the README.
+
+### Prior handoff: 0.4.0 released; parinfer line is an experimental preview
+
+**Where.** Released at commit `de78901` (merge of PR #38, tagged **`v0.4.0`**).
+crates.io + the 5-platform GitHub Release binaries are live and verified (see the
+"Released 0.4.0" bullet under **Now**).
 
 **What 0.4.0 shipped.** Two lines. **Stable:** the `islisp-eisl` opt-in ISLisp indent
 style (ADR-0042) and the Clojure/Phel comment-only-line fidelity fix (the formatter now
