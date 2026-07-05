@@ -15,8 +15,10 @@
 //!   formatter and its Nameless *production* path); unbalanced input is refused
 //!   unchanged with a positioned diagnostic.
 //! - **Indent mode** ([`Mode::Indent`]): indentation is the source of truth;
-//!   close-parens are inferred from it over a tolerant `lex()` token scan.
-//!   Nameless-aware column *interpretation* is the follow-up (issue #26).
+//!   close-parens are inferred from it over a tolerant `lex()` token scan. When
+//!   the Nameless overlay is enabled, columns are read as they *display*
+//!   (composed prefixes count as their shorter glyph), so indentation is
+//!   interpreted the way a Nameless user sees it (ADR-0030).
 //!
 //! # Safety model (ADR-0045)
 //!
@@ -210,6 +212,11 @@ fn run_indent(req: &Request) -> Answer {
     let mut delims: Vec<Vec<DelimTok>> = (0..n).map(|_| Vec::new()).collect();
     let mut comment_start: Vec<Option<usize>> = vec![None; n];
     let mut in_multiline = vec![false; n]; // line *starts* inside a string/comment
+                                           // Per line, the `(offset, columns_saved)` of each Nameless-composed prefix
+                                           // (ADR-0030/#26). Column measurement subtracts these so indentation is read
+                                           // in *displayed* columns — the parinfer-rust-emacs pain point. Empty unless
+                                           // the Emacs-Lisp-only Nameless overlay is enabled.
+    let mut savings: Vec<Vec<(usize, usize)>> = vec![Vec::new(); n];
     for t in &tokens {
         let l = line_of(&ranges, t.span.start as usize);
         match t.kind {
@@ -234,6 +241,14 @@ fn run_indent(req: &Request) -> Answer {
                 let end_line = line_of(&ranges, (t.span.end as usize).saturating_sub(1));
                 for entry in in_multiline.iter_mut().take(end_line + 1).skip(l + 1) {
                     *entry = true;
+                }
+            }
+            TokenKind::Atom => {
+                if let Some(nl) = &req.nameless {
+                    let save = nl.saving(&source[t.span.start as usize..t.span.end as usize]);
+                    if save > 0 {
+                        savings[l].push((t.span.start as usize, save));
+                    }
                 }
             }
             _ => {}
@@ -295,9 +310,10 @@ fn run_indent(req: &Request) -> Answer {
             continue;
         }
 
-        // Indentation column of the first code character.
+        // Indentation column of the first code character (in displayed columns,
+        // so Nameless-composed prefixes earlier on the line count as narrower).
         let indent_len = code.len() - code.trim_start_matches([' ', '\t']).len();
-        let x = col_at(&source[ls..ls + indent_len], tab_width);
+        let x = display_col(source, ls, ls + indent_len, tab_width, &savings[l]);
 
         // Close every open delimiter at or to the right of this indentation,
         // appending its closer to the previous code line.
@@ -323,7 +339,7 @@ fn run_indent(req: &Request) -> Answer {
                 continue;
             }
             if d.open {
-                let col = col_at(&source[ls..d.start], tab_width);
+                let col = display_col(source, ls, d.start, tab_width, &savings[l]);
                 stack.push((d.delim, col));
             } else {
                 match stack.last() {
@@ -456,9 +472,30 @@ fn unresolvable(source: &str, tokens: &[Token], ranges: &[(usize, usize)]) -> Op
     None
 }
 
-/// The display column of the string `prefix` (a line prefix), expanding tabs to
-/// the next multiple of `tab_width` and measuring glyphs by East Asian Width —
-/// matching Emacs's `current-column`.
+/// The displayed column of byte `offset` on the line starting at `line_start`,
+/// expanding tabs to the next multiple of `tab_width` and measuring glyphs by
+/// East Asian Width (Emacs's `current-column`), then subtracting the savings of
+/// every Nameless-composed prefix that begins earlier on the line (ADR-0030) —
+/// so indentation and open-paren columns are read as the user sees them.
+fn display_col(
+    source: &str,
+    line_start: usize,
+    offset: usize,
+    tab_width: usize,
+    savings: &[(usize, usize)],
+) -> usize {
+    let raw = col_at(&source[line_start..offset], tab_width);
+    let saved: usize = savings
+        .iter()
+        .filter(|(o, _)| *o < offset)
+        .map(|(_, s)| *s)
+        .sum();
+    raw.saturating_sub(saved)
+}
+
+/// The raw display column of the string `prefix` (a line prefix), expanding tabs
+/// to the next multiple of `tab_width` and measuring glyphs by East Asian Width
+/// — matching Emacs's `current-column` before any Nameless composition.
 fn col_at(prefix: &str, tab_width: usize) -> usize {
     let mut col = 0;
     for ch in prefix.chars() {
@@ -843,5 +880,32 @@ mod tests {
         let a = indent("", Dialect::EmacsLisp);
         assert!(a.success);
         assert_eq!(a.text, "");
+    }
+
+    /// The #26 headline: under Nameless, `php-foo` displays as `:foo`, so the
+    /// inner `(` sits at displayed column 6, not raw column 9. `baz` indented to
+    /// 7 spaces is therefore *inside* `bar` (7 > 6). Without the overlay, naive
+    /// raw-column reading (7 < 9) would close `bar` and kick `baz` out — exactly
+    /// the parinfer-rust-emacs pain point.
+    #[test]
+    fn indent_nameless_reads_displayed_columns() {
+        let src = "(php-foo (bar\n       baz";
+        let mut r = req(Mode::Indent, src, Dialect::EmacsLisp);
+        r.nameless = Some(Nameless::for_file("php-mode.el"));
+        let a = run(&r);
+        assert!(a.success);
+        assert_eq!(
+            a.text, "(php-foo (bar\n       baz))",
+            "baz stays inside bar"
+        );
+        assert_balanced(&a.text, Dialect::EmacsLisp);
+    }
+
+    #[test]
+    fn indent_nameless_off_is_unchanged_from_core() {
+        // Same input, no overlay: raw columns kick baz out of bar (the #25 path).
+        let src = "(php-foo (bar\n       baz";
+        let a = indent(src, Dialect::EmacsLisp);
+        assert_eq!(a.text, "(php-foo (bar)\n       baz)");
     }
 }

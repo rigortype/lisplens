@@ -32,9 +32,16 @@ gets its own ADR alongside ADR-0005. Serial deps #24 → #25 → #26; all
 mode + MCP tool + ADR-0045. **#25 shipped** (this branch): indent mode — a tolerant
 `lex()` token scan that infers close-paren placement from indentation (own `col_at`
 display-width columns), balance-generating, with unterminated-string / eol-backslash /
-mid-line-unmatched-close refusals; indentation is never rewritten. **Next: #26** —
-Nameless-aware indent-mode column *interpretation* (subtract `Nameless::saving` when
-reading indentation columns), the parinfer-rust-emacs pain-point fix.
+mid-line-unmatched-close refusals; indentation is never rewritten. **#26 shipped**
+(this branch): indent-mode column *interpretation* is now Nameless-aware —
+`display_col` subtracts `Nameless::saving` (collected from `Atom` tokens) so
+indentation and open-paren columns are read in *displayed* columns, fixing the
+parinfer-rust-emacs pain point (a `php-foo`-prefixed inner form nests its children
+by displayed, not raw, column). **The parinfer-alternative arc (#24–#26) is
+complete** — subcommand + paren mode + indent mode + Nameless interpretation, all
+shipped. Candidate follow-ups if picked up: editor integration (with the deferred
+live cursor-protection rules), smart mode, and the paren-mode "clamp-to-range"
+refinement.
 
 **0.3.0 shipped** — see the "Released 0.3.0" bullet under **Now** for the summary.
 crates.io + GitHub Release (5-platform binaries) both live and verified. The
