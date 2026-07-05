@@ -10,12 +10,13 @@
 //!
 //! # Modes
 //!
-//! - **Paren mode** ([`Mode::Paren`], this slice): parens are the source of
-//!   truth. Balanced input is reindented to lisplens's faithful Emacs
-//!   indentation (reusing the formatter and its Nameless *production* path);
-//!   unbalanced input is refused unchanged with a positioned diagnostic.
-//! - **Indent mode** and **Nameless-aware indentation** are the follow-ups
-//!   (issues #25 / #26).
+//! - **Paren mode** ([`Mode::Paren`]): parens are the source of truth. Balanced
+//!   input is reindented to lisplens's faithful Emacs indentation (reusing the
+//!   formatter and its Nameless *production* path); unbalanced input is refused
+//!   unchanged with a positioned diagnostic.
+//! - **Indent mode** ([`Mode::Indent`]): indentation is the source of truth;
+//!   close-parens are inferred from it over a tolerant `lex()` token scan.
+//!   Nameless-aware column *interpretation* is the follow-up (issue #26).
 //!
 //! # Safety model (ADR-0045)
 //!
@@ -25,26 +26,30 @@
 //! **completely unchanged** with `success = false` and a positioned diagnostic.
 //! Broken output is never emitted either way.
 
-use lispexp::{parse, Dialect, ErrorKind, Options, ParseError};
+use lispexp::{lex, parse, Delim, Dialect, ErrorKind, Options, ParseError, Token, TokenKind};
+use unicode_width::UnicodeWidthChar;
 
 use crate::config::FormatConfig;
 use crate::format;
 use crate::nameless::Nameless;
 
-/// Which parinfer transform to run. Indent mode (#25) is a future variant.
+/// Which parinfer transform to run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     /// Parens are the source of truth; indentation is corrected. Requires
     /// balanced input.
     Paren,
+    /// Indentation is the source of truth; close-parens are inferred from it.
+    Indent,
 }
 
 impl Mode {
-    /// Parse a mode name (`paren`), or `None` if unrecognized.
+    /// Parse a mode name (`paren` / `indent`), or `None` if unrecognized.
     #[must_use]
     pub fn from_name(name: &str) -> Option<Mode> {
         match name {
             "paren" => Some(Mode::Paren),
+            "indent" => Some(Mode::Indent),
             _ => None,
         }
     }
@@ -109,6 +114,18 @@ pub struct Answer {
 pub fn run(req: &Request) -> Answer {
     match req.mode {
         Mode::Paren => run_paren(req),
+        Mode::Indent => run_indent(req),
+    }
+}
+
+/// Build the "refuse, unchanged" answer: input returned verbatim, `success`
+/// false, the input cursor preserved (ADR-0045 failure contract).
+fn refuse(req: &Request, error: Error) -> Answer {
+    Answer {
+        text: req.text.to_string(),
+        success: false,
+        error: Some(error),
+        cursor: req.cursor,
     }
 }
 
@@ -118,12 +135,7 @@ fn run_paren(req: &Request) -> Answer {
     let parsed = parse(req.text, &options);
     if let Some(err) = parsed.errors.first() {
         // Imbalance / unresolvable: return the input untouched + a diagnostic.
-        return Answer {
-            text: req.text.to_string(),
-            success: false,
-            error: Some(to_error(req.text, err)),
-            cursor: req.cursor,
-        };
+        return refuse(req, to_error(req.text, err));
     }
     // Balanced: faithful reindent. Nameless production side (column *generation*)
     // is Emacs-Lisp-only, reusing the formatter's existing path.
@@ -137,6 +149,365 @@ fn run_paren(req: &Request) -> Answer {
         success: true,
         error: None,
         cursor,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Indent mode (#25)
+// ---------------------------------------------------------------------------
+
+/// One structural delimiter token on a line.
+struct DelimTok {
+    /// Byte offset of the delimiter's start (`(`, `[`, `#(`, `)`, …).
+    start: usize,
+    /// Byte offset just past the delimiter.
+    end: usize,
+    /// The delimiter shape.
+    delim: Delim,
+    /// Whether it opens (`(`/`#(`) or closes (`)`).
+    open: bool,
+}
+
+/// A rendered output line, split so that inferred close-parens append to the
+/// end of the *code*, before any trailing comment.
+struct OutLine {
+    /// The code portion (leading whitespace preserved, trailing whitespace and
+    /// movable close-parens stripped); inferred closers are appended here.
+    code: String,
+    /// The trailing comment portion, including the whitespace gap before it.
+    comment: String,
+}
+
+/// Indent mode: indentation is authoritative; infer the close-paren placement.
+///
+/// A tolerant `lex()` token scan (parens inside strings / comments / char
+/// literals are non-structural by construction) drives a stack of open
+/// delimiters keyed by their display column. Each line's leading indentation
+/// closes every open delimiter at or right of it, and its movable trailing
+/// close-parens are re-derived rather than trusted. Indentation itself is never
+/// changed. Unresolvable lexical states (unterminated string/comment,
+/// end-of-line backslash, unmatched close-paren) refuse the input unchanged.
+fn run_indent(req: &Request) -> Answer {
+    let source = req.text;
+    if source.trim().is_empty() {
+        return Answer {
+            text: source.to_string(),
+            success: true,
+            error: None,
+            cursor: req.cursor,
+        };
+    }
+    let options = Options::for_dialect(req.dialect);
+    let tokens: Vec<Token> = lex(source, &options).collect();
+    let ranges = line_ranges(source);
+
+    if let Some(err) = unresolvable(source, &tokens, &ranges) {
+        return refuse(req, err);
+    }
+
+    // Per-line structural facts.
+    let n = ranges.len();
+    let mut delims: Vec<Vec<DelimTok>> = (0..n).map(|_| Vec::new()).collect();
+    let mut comment_start: Vec<Option<usize>> = vec![None; n];
+    let mut in_multiline = vec![false; n]; // line *starts* inside a string/comment
+    for t in &tokens {
+        let l = line_of(&ranges, t.span.start as usize);
+        match t.kind {
+            TokenKind::Open(d) | TokenKind::HashOpen(d) => delims[l].push(DelimTok {
+                start: t.span.start as usize,
+                end: t.span.end as usize,
+                delim: d,
+                open: true,
+            }),
+            TokenKind::Close(d) => delims[l].push(DelimTok {
+                start: t.span.start as usize,
+                end: t.span.end as usize,
+                delim: d,
+                open: false,
+            }),
+            TokenKind::LineComment => {
+                if comment_start[l].is_none() {
+                    comment_start[l] = Some(t.span.start as usize);
+                }
+            }
+            TokenKind::Str | TokenKind::BlockComment => {
+                let end_line = line_of(&ranges, (t.span.end as usize).saturating_sub(1));
+                for entry in in_multiline.iter_mut().take(end_line + 1).skip(l + 1) {
+                    *entry = true;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let tab_width = req.config.tab_width.max(1);
+    let mut out: Vec<OutLine> = Vec::with_capacity(n);
+    let mut stack: Vec<(Delim, usize)> = Vec::new(); // (delim, open column)
+    let mut last_code: Option<usize> = None;
+
+    for (l, &(ls, le)) in ranges.iter().enumerate() {
+        if in_multiline[l] {
+            // Inside a multi-line string/comment: emit verbatim, no structure.
+            out.push(OutLine {
+                code: source[ls..le].to_string(),
+                comment: String::new(),
+            });
+            continue;
+        }
+
+        let code_region_end = comment_start[l].unwrap_or(le);
+
+        // Strip the movable trailing close-parens (and the whitespace between
+        // them): the run of `Close` tokens at the end of the code region.
+        let mut strip_from = code_region_end;
+        for d in delims[l].iter().rev() {
+            if d.start >= strip_from {
+                continue;
+            }
+            if !d.open && source[d.end..strip_from].trim().is_empty() {
+                strip_from = d.start;
+            } else {
+                break;
+            }
+        }
+
+        let code = source[ls..strip_from].trim_end();
+        let code_owned = code.to_string();
+        // The comment portion keeps the whitespace immediately before it.
+        let comment = match comment_start[l] {
+            Some(cs) => {
+                let before = &source[..cs];
+                let gap = before.len() - before.trim_end_matches([' ', '\t']).len();
+                source[cs - gap..le].to_string()
+            }
+            None => String::new(),
+        };
+
+        if code.is_empty() {
+            // A blank line, a comment-only line, or a line that was only movable
+            // closers: no code, so it makes no indentation decision and is not a
+            // target for appended closers (a closer would land on a comment). Any
+            // dropped closers are re-inferred at the next code line or EOF.
+            out.push(OutLine {
+                code: String::new(),
+                comment,
+            });
+            continue;
+        }
+
+        // Indentation column of the first code character.
+        let indent_len = code.len() - code.trim_start_matches([' ', '\t']).len();
+        let x = col_at(&source[ls..ls + indent_len], tab_width);
+
+        // Close every open delimiter at or to the right of this indentation,
+        // appending its closer to the previous code line.
+        while let Some(&(d, c)) = stack.last() {
+            if c >= x {
+                stack.pop();
+                append_closer(&mut out, last_code, d);
+            } else {
+                break;
+            }
+        }
+
+        out.push(OutLine {
+            code: code_owned,
+            comment,
+        });
+        let this = out.len() - 1;
+        last_code = Some(this);
+
+        // Track the retained (locked, mid-line) delimiters against the stack.
+        for d in &delims[l] {
+            if d.start >= strip_from {
+                continue;
+            }
+            if d.open {
+                let col = col_at(&source[ls..d.start], tab_width);
+                stack.push((d.delim, col));
+            } else {
+                match stack.last() {
+                    Some(&(od, _)) if close_class(od) == close_class(d.delim) => {
+                        stack.pop();
+                    }
+                    _ => {
+                        let (line, col) = byte_to_line_col(source, d.start);
+                        return refuse(
+                            req,
+                            Error {
+                                name: "unmatched-close-paren".to_string(),
+                                message: "unmatched close paren".to_string(),
+                                line,
+                                x: col,
+                            },
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // Close everything still open at end of input.
+    while let Some((d, _)) = stack.pop() {
+        append_closer(&mut out, last_code, d);
+    }
+
+    let mut text = String::with_capacity(source.len() + 8);
+    for (i, ol) in out.iter().enumerate() {
+        if i > 0 {
+            text.push('\n');
+        }
+        text.push_str(&ol.code);
+        text.push_str(&ol.comment);
+    }
+    if source.ends_with('\n') {
+        text.push('\n');
+    }
+
+    // The transform is balance-generating (ADR-0045): the result must parse
+    // clean. It always should by construction; refuse defensively if not.
+    if let Some(err) = parse(&text, &options).errors.first() {
+        return refuse(req, to_error(&text, err));
+    }
+
+    let cursor = req.cursor.map(|c| clamp_cursor(&text, c));
+    Answer {
+        text,
+        success: true,
+        error: None,
+        cursor,
+    }
+}
+
+/// The byte range `[start, end)` (excluding the newline) of each line.
+fn line_ranges(source: &str) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    let bytes = source.as_bytes();
+    let mut start = 0;
+    for (i, &b) in bytes.iter().enumerate() {
+        if b == b'\n' {
+            ranges.push((start, i));
+            start = i + 1;
+        }
+    }
+    if start < source.len() || source.is_empty() {
+        ranges.push((start, source.len()));
+    }
+    ranges
+}
+
+/// The 0-based line index containing `byte` (a newline counts as ending its
+/// line). `ranges` is sorted by start, so this is a binary search.
+fn line_of(ranges: &[(usize, usize)], byte: usize) -> usize {
+    match ranges.binary_search_by(|&(s, _)| s.cmp(&byte)) {
+        Ok(i) => i,
+        Err(i) => i.saturating_sub(1),
+    }
+}
+
+/// The token covering `byte`, if any (tokens tile the input).
+fn token_at(tokens: &[Token], byte: usize) -> Option<&Token> {
+    let i = tokens.partition_point(|t| (t.span.start as usize) <= byte);
+    tokens
+        .get(i.wrapping_sub(1))
+        .filter(|t| (t.span.start as usize) <= byte && byte < t.span.end as usize)
+}
+
+/// Detect the lexical states indent mode cannot resolve into balanced output:
+/// an unterminated string/comment/… (from the lexer's own `Unterminated` state)
+/// or a backslash escaping a line end outside a string/comment/char.
+fn unresolvable(source: &str, tokens: &[Token], ranges: &[(usize, usize)]) -> Option<Error> {
+    for t in tokens {
+        if let TokenKind::Unterminated(_) = t.kind {
+            let (line, x) = byte_to_line_col(source, t.span.start as usize);
+            return Some(Error {
+                name: "unclosed-quote".to_string(),
+                message: "unterminated string, comment, or delimited token".to_string(),
+                line,
+                x,
+            });
+        }
+    }
+    let bytes = source.as_bytes();
+    for (i, &b) in bytes.iter().enumerate() {
+        if b == b'\\' && (i + 1 == bytes.len() || bytes[i + 1] == b'\n') {
+            let benign = token_at(tokens, i).is_some_and(|t| {
+                matches!(
+                    t.kind,
+                    TokenKind::Str
+                        | TokenKind::LineComment
+                        | TokenKind::BlockComment
+                        | TokenKind::Char
+                        | TokenKind::Bool(_)
+                )
+            });
+            if !benign {
+                let _ = ranges;
+                let (line, x) = byte_to_line_col(source, i);
+                return Some(Error {
+                    name: "eol-backslash".to_string(),
+                    message: "backslash at end of line".to_string(),
+                    line,
+                    x,
+                });
+            }
+        }
+    }
+    None
+}
+
+/// The display column of the string `prefix` (a line prefix), expanding tabs to
+/// the next multiple of `tab_width` and measuring glyphs by East Asian Width —
+/// matching Emacs's `current-column`.
+fn col_at(prefix: &str, tab_width: usize) -> usize {
+    let mut col = 0;
+    for ch in prefix.chars() {
+        if ch == '\t' {
+            col = (col / tab_width + 1) * tab_width;
+        } else {
+            col += UnicodeWidthChar::width(ch).unwrap_or(0);
+        }
+    }
+    col
+}
+
+/// A close-delimiter equivalence class: `}` closes both `{` and `#{`.
+fn close_class(delim: Delim) -> u8 {
+    match delim {
+        Delim::Round => 0,
+        Delim::Square => 1,
+        Delim::Curly | Delim::Set => 2,
+    }
+}
+
+/// The closing glyph for a delimiter shape.
+fn close_glyph(delim: Delim) -> &'static str {
+    match delim {
+        Delim::Round => ")",
+        Delim::Square => "]",
+        Delim::Curly | Delim::Set => "}",
+    }
+}
+
+/// Append the closer for `delim` to the end of the last code line's code.
+fn append_closer(out: &mut [OutLine], last_code: Option<usize>, delim: Delim) {
+    if let Some(i) = last_code {
+        out[i].code.push_str(close_glyph(delim));
+    }
+}
+
+/// Track a cursor across an indent-mode transform. Indentation and code are
+/// preserved verbatim up to each line's original code end (only movable trailing
+/// closers/whitespace change and inferred closers append), and the line count is
+/// preserved, so the cursor keeps its line and clamps to the new line length.
+fn clamp_cursor(new: &str, cursor: Cursor) -> Cursor {
+    let len = new
+        .lines()
+        .nth(cursor.line)
+        .map_or(cursor.x, |l| l.chars().count());
+    Cursor {
+        line: cursor.line,
+        x: cursor.x.min(len),
     }
 }
 
@@ -342,8 +713,135 @@ mod tests {
     }
 
     #[test]
-    fn unknown_mode_name_is_none() {
-        assert_eq!(Mode::from_name("indent"), None); // #25
+    fn mode_name_parsing() {
         assert_eq!(Mode::from_name("paren"), Some(Mode::Paren));
+        assert_eq!(Mode::from_name("indent"), Some(Mode::Indent));
+        assert_eq!(Mode::from_name("smart"), None);
+    }
+
+    // --- indent mode ---
+
+    fn indent(src: &str, dialect: Dialect) -> Answer {
+        run(&req(Mode::Indent, src, dialect))
+    }
+
+    /// Every successful indent-mode result must parse clean (balance-generating).
+    fn assert_balanced(text: &str, dialect: Dialect) {
+        assert!(
+            parse(text, &Options::for_dialect(dialect))
+                .errors
+                .is_empty(),
+            "expected balanced output, got:\n{text}"
+        );
+    }
+
+    #[test]
+    fn indent_infers_closers_at_eof() {
+        let a = indent("(defun f (x)\n  (+ x\n     1", Dialect::EmacsLisp);
+        assert!(a.success);
+        assert_eq!(a.text, "(defun f (x)\n  (+ x\n     1))");
+        assert_balanced(&a.text, Dialect::EmacsLisp);
+    }
+
+    #[test]
+    fn indent_dedent_closes_and_indentation_is_untouched() {
+        // Indentation is authoritative and never rewritten; only closers move.
+        let a = indent("(when x\n  (foo)\n  (bar))", Dialect::EmacsLisp);
+        assert_eq!(a.text, "(when x\n  (foo)\n  (bar))");
+    }
+
+    #[test]
+    fn indent_moves_paren_when_next_line_is_indented_deeper() {
+        // qux is indented inside bar, so bar's close-paren moves after qux.
+        let a = indent("(foo (bar baz)\n          qux)\n", Dialect::EmacsLisp);
+        assert_eq!(a.text, "(foo (bar baz\n          qux))\n");
+        assert_balanced(&a.text, Dialect::EmacsLisp);
+    }
+
+    #[test]
+    fn indent_places_closer_before_a_trailing_comment() {
+        let a = indent("(defun f ()\n  body  ; hi\n", Dialect::EmacsLisp);
+        assert_eq!(a.text, "(defun f ()\n  body)  ; hi\n");
+        assert_balanced(&a.text, Dialect::EmacsLisp);
+    }
+
+    #[test]
+    fn indent_ignores_parens_inside_strings() {
+        let a = indent("(list \"a)b\"\n      c\n", Dialect::EmacsLisp);
+        assert_eq!(a.text, "(list \"a)b\"\n      c)\n");
+        assert_balanced(&a.text, Dialect::EmacsLisp);
+    }
+
+    #[test]
+    fn indent_all_trail_line_moves_closer_up() {
+        let a = indent("(foo\n  bar\n  )\n", Dialect::EmacsLisp);
+        assert_eq!(a.text, "(foo\n  bar)\n\n");
+        assert_balanced(&a.text, Dialect::EmacsLisp);
+    }
+
+    #[test]
+    fn indent_trims_superfluous_trailing_closers() {
+        let a = indent("(foo))\n", Dialect::EmacsLisp);
+        assert!(a.success);
+        assert_eq!(a.text, "(foo)\n");
+    }
+
+    #[test]
+    fn indent_clojure_brackets_maps_and_sets() {
+        let a = indent("(defn f [x]\n  {:a 1\n   :b #{1 2}", Dialect::Clojure);
+        assert!(a.success);
+        assert_eq!(a.text, "(defn f [x]\n  {:a 1\n   :b #{1 2}})");
+        assert_balanced(&a.text, Dialect::Clojure);
+    }
+
+    #[test]
+    fn indent_is_idempotent_on_balanced_input() {
+        let src = "(defun f (x)\n  (let ((y (+ x 1)))\n    (message \"%d\" y)))\n";
+        let once = indent(src, Dialect::EmacsLisp);
+        assert_eq!(once.text, src, "well-formed input is unchanged");
+        let twice = indent(&once.text, Dialect::EmacsLisp);
+        assert_eq!(twice.text, once.text, "idempotent");
+    }
+
+    #[test]
+    fn indent_refuses_unterminated_string_unchanged() {
+        let src = "(foo \"bar\n";
+        let a = indent(src, Dialect::EmacsLisp);
+        assert!(!a.success);
+        assert_eq!(a.text, src);
+        assert_eq!(a.error.unwrap().name, "unclosed-quote");
+    }
+
+    #[test]
+    fn indent_refuses_eol_backslash_unchanged() {
+        let src = "(foo bar\\\n baz)\n";
+        let a = indent(src, Dialect::EmacsLisp);
+        assert!(!a.success);
+        assert_eq!(a.text, src);
+        assert_eq!(a.error.unwrap().name, "eol-backslash");
+    }
+
+    #[test]
+    fn indent_refuses_mid_line_unmatched_close() {
+        let a = indent("a)b\n", Dialect::EmacsLisp);
+        assert!(!a.success);
+        assert_eq!(a.error.unwrap().name, "unmatched-close-paren");
+    }
+
+    #[test]
+    fn indent_cursor_is_clamped_to_line_length() {
+        let mut r = req(Mode::Indent, "(a\n  b", Dialect::EmacsLisp);
+        r.cursor = Some(Cursor { line: 1, x: 99 });
+        let a = run(&r);
+        let c = a.cursor.unwrap();
+        assert_eq!(c.line, 1);
+        assert_eq!(c.x, 4, "clamped to `  b)` length");
+    }
+
+    #[test]
+    fn indent_empty_input_is_unchanged() {
+        let a = indent("", Dialect::EmacsLisp);
+        assert!(a.success);
+        assert_eq!(a.text, "");
     }
 }

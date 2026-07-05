@@ -127,9 +127,9 @@ fn tools() -> Value {
         ),
         tool(
             "parinfer",
-            "Parinfer-style transform of Lisp *text* (not a file). paren mode: require balance, then reindent faithfully (Emacs-native, Nameless-aware). Returns a JSON answer {text, success, error, cursorX, cursorLine}; on failure text is the unchanged input",
+            "Parinfer-style transform of Lisp *text* (not a file). paren = require balance then reindent faithfully (Emacs-native, Nameless-aware); indent = indentation is authoritative, infer close-parens from it. Returns a JSON answer {text, success, error, cursorX, cursorLine}; on failure text is the unchanged input",
             json!({
-                "mode": json!({ "type": "string", "enum": ["paren"], "description": "paren = balance-checked faithful reindent" }),
+                "mode": json!({ "type": "string", "enum": ["paren", "indent"], "description": "paren = balance-checked faithful reindent; indent = infer close-parens from indentation" }),
                 "text": json!({ "type": "string", "description": "the buffer text to transform" }),
                 "dialect": json!({ "type": "string", "description": "dialect, kebab-case (default emacs-lisp)" }),
                 "nameless": json!({ "type": "boolean", "description": "enable the Nameless overlay (Emacs Lisp only)" }),
@@ -264,7 +264,7 @@ fn run_tool(name: &str, args: &Value) -> Result<String, String> {
         "parinfer" => {
             let mode_name = arg(args, "mode")?;
             let mode = crate::parinfer::Mode::from_name(mode_name)
-                .ok_or_else(|| format!("unknown mode `{mode_name}` (expected: paren)"))?;
+                .ok_or_else(|| format!("unknown mode `{mode_name}` (expected: paren, indent)"))?;
             let text = arg(args, "text")?.to_string();
             let dialect = match args.get("dialect").and_then(Value::as_str) {
                 Some(d) => d
@@ -516,6 +516,18 @@ mod tests {
         assert_eq!(v["success"], json!(false));
         assert_eq!(v["text"], json!("(a\n"), "input returned unchanged");
         assert_eq!(v["error"]["name"], json!("unclosed-paren"));
+    }
+
+    #[test]
+    fn parinfer_tool_indent_mode_infers_closers() {
+        let out = run_tool(
+            "parinfer",
+            &json!({ "mode": "indent", "text": "(defun f (x)\n  (+ x\n     1" }),
+        )
+        .unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["success"], json!(true));
+        assert_eq!(v["text"], json!("(defun f (x)\n  (+ x\n     1))"));
     }
 
     #[test]

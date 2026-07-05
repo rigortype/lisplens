@@ -311,11 +311,11 @@ fn run_parinfer(args: &[&str]) -> ExitCode {
     }
 
     let Some(mode_name) = mode_name else {
-        eprintln!("lisplens: parinfer: no mode given (expected: paren)");
+        eprintln!("lisplens: parinfer: no mode given (expected: paren, indent)");
         return ExitCode::FAILURE;
     };
     let Some(mode) = lisplens::parinfer::Mode::from_name(mode_name) else {
-        eprintln!("lisplens: parinfer: unknown mode `{mode_name}` (expected: paren)");
+        eprintln!("lisplens: parinfer: unknown mode `{mode_name}` (expected: paren, indent)");
         return ExitCode::FAILURE;
     };
 
@@ -644,7 +644,7 @@ usage:
   lisplens find <name> [dir]    find definitions by name (default dir: .)
   lisplens refs <name> [dir]    find symbol occurrences (code/data tagged)
   lisplens format [--nameless] [--tonsky] <file>  reindent a Lisp file (native, by dialect; --tonsky = Clojure fixed style)
-  lisplens parinfer paren [--json] [--nameless] [--name N|--file P] [--cursor-line N --cursor-x M]  parinfer-style transform of stdin->stdout (ADR-0045)
+  lisplens parinfer <paren|indent> [--json] [--nameless] [--name N|--file P] [--cursor-line N --cursor-x M]  parinfer-style transform of stdin->stdout (ADR-0045)
   lisplens check <file>         parse-check a Lisp file (diagnostics; non-zero on errors)
   lisplens rename <old> <new> <file>   rename a symbol across a file (symbol-exact, safe)
   lisplens inline <name> <file>        inline a function at its call sites (safe subset)
