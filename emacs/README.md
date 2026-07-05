@@ -20,9 +20,27 @@ Put `lisplens-parinfer.el` on your `load-path`, then:
 
 ```elisp
 (require 'lisplens-parinfer)
-;; optional: enable the keymap in Lisp buffers
+;; enable live parinfer in Lisp buffers
 (add-hook 'emacs-lisp-mode-hook #'lisplens-parinfer-mode)
 ```
+
+## Live mode
+
+`lisplens-parinfer-mode` is a **live** minor mode: while on, every edit is
+reflowed by `lisplens-parinfer-live-mode` (`indent` by default) after a short
+idle delay, so parens and indentation stay in sync as you type — you stop typing
+close-parens and let indentation drive them. The server's cursor-line protection
+keeps the paren trail on point's line from collapsing under you, and mid-edit
+unbalanced input is left silently untouched (no echo-area spam).
+
+Indent is the sensible live mode because it handles the unbalanced input that is
+normal mid-edit; `paren` requires balanced parens and so refuses (does nothing)
+while you type — it is offered only for completeness. Live transforms run over
+the whole buffer; on very large buffers you may prefer to run the explicit
+commands instead (scoping each fire to the enclosing form is a possible future
+refinement).
+
+Relevant options: `lisplens-parinfer-live-mode`, `lisplens-parinfer-idle-delay`.
 
 ## Commands
 
@@ -39,8 +57,7 @@ Point is restored from the server's reported cursor. On a refusal (unbalanced
 input, an unterminated string, …) the buffer is left **untouched** and the
 diagnostic is echoed.
 
-Firing on every edit — the live parinfer experience — is a separate layer built
-on top of this one; here the transforms are explicit commands.
+These commands work whether or not the live minor mode is on.
 
 ## Configuration
 
@@ -50,6 +67,8 @@ on top of this one; here the transforms are explicit commands.
 - `lisplens-parinfer-nameless` — `auto` (follow `nameless-mode`), `t`, or `nil`;
   when on for Emacs Lisp, indentation is read/produced in Nameless's displayed
   columns.
+- `lisplens-parinfer-live-mode` — which mode fires live (`indent` or `paren`).
+- `lisplens-parinfer-idle-delay` — idle seconds before a live transform runs.
 - `lisplens-parinfer-timeout` — seconds to wait for a server answer.
 
 ## Verification
@@ -57,4 +76,7 @@ on top of this one; here the transforms are explicit commands.
 Byte-compiles clean on Emacs 32. Smoke-tested end to end against the real server:
 indent mode infers the missing close-parens, paren mode faithfully reindents a
 balanced buffer, an unbalanced buffer is left unchanged, point survives a
-reindent, and the one shared process is reused across buffers.
+reindent, and the one shared process is reused across buffers. Live mode: typing
+an open paren auto-closes it after the idle delay, a mid-edit unterminated string
+is left untouched with no echo-area noise, and disabling the mode removes the
+hook and stops the shared process when no buffer uses it.
