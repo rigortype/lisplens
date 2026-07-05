@@ -115,3 +115,7 @@ _Avoid_: type, constraint, guard, predicate
 **Structural equality**:
 Equality of two forms **modulo formatting**: recursive comparison of `DatumKind` ignoring `span`/`line` (so whitespace and comments do not matter), with leaf text compared literally (no reader-sugar, number, or CL-case normalization). The basis of literal matching and non-linear matching. (Distinct from `Datum`'s derived `==`, which compares spans.)
 _Avoid_: deep equality, sexp equality, structural match
+
+**Structural diff**:
+A read-only observation that compares two forms — or two versions of a file — **modulo formatting** (on the Structural equality basis) and reports how the second differs from the first: which subforms were added, removed, or changed, as a tree. Its purpose is to let an agent see *how a unit's logic changed* between versions and focus attention there; pure reindentation or comment churn yields an empty diff. The inverse orientation of a Patch: a Patch *applies* edits to produce a new version, a Structural diff *observes* the difference between two given versions (it never writes). Exposed as the `diff` command.
+_Avoid_: patch, delta, changeset, textual diff, line diff
