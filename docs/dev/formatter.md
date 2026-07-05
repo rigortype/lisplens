@@ -63,12 +63,20 @@ A dotted-tail sublist — `(a . (b c))`, which Emacs reads as `(a b c)` — open
 own containing sexp; `container_at` descends into the tail so its elements indent
 against it. For a lone-car dotted pair (`'(eval . FORM)`) Emacs instead treats
 the `.` itself as the first argument, so the tail's continuation aligns under the
-dot — reached via lispexp's `Datum::dot_span` (0.5). Comment-only lines follow
-Emacs's three-way rule: `;;;` (3+) is never reindented (left in place, like a
-multi-line string), a lone `;` goes to `comment-column` (`indent-for-comment`,
-default 40, always — independent of nesting or prior column), and `;;` indents as
-code. Reindentation only rewrites leading whitespace, so it can never change what
-the file parses to (it is always safe).
+dot — reached via lispexp's `Datum::dot_span` (0.5). Comment-only lines are
+**dialect-specific**: the Emacs-family engines (Emacs Lisp, Common Lisp, Scheme)
+follow Emacs's three-way rule — `;;;` (3+) is never reindented (left in place,
+like a multi-line string), a lone `;` goes to `comment-column`
+(`indent-for-comment`, default 40, always — independent of nesting or prior
+column), and `;;` indents as code. The **Clojure engine** (Clojure, Phel, and the
+induced-table dialects Fennel/Janet/Hy/LFE/ISLisp) instead **leaves every
+comment-only line exactly where it was written**, matching `cljfmt` and
+`phel format` (verified byte-exact), which never reindent a comment. Comment-only
+lines are found from the lexer trivia (`lex`), which classifies each dialect's own
+comment character (`;`, or Janet's `#`) and distinguishes a `#` comment from a
+`#(`/`#{` dispatch (lispexp feedback 0007); a trailing comment (code before it) is
+never a comment-only line. Reindentation only rewrites leading whitespace, so it
+can never change what the file parses to (it is always safe).
 
 ### The key invariant — do not regress
 

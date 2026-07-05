@@ -20,10 +20,11 @@
 //! never changes what a file parses to — and fidelity gaps are closed
 //! iteratively against the Emacs oracle (ADR-0026).
 
+use std::collections::HashSet;
 use std::ops::Range;
 
 use lispexp::indent::{harvest_indent_specs, IndentSpec, IndentTable};
-use lispexp::{parse, Datum, DatumKind, Dialect, LineIndex, Options};
+use lispexp::{lex, parse, Datum, DatumKind, Dialect, LineIndex, Options, TokenKind};
 
 use crate::config::FormatConfig;
 use crate::nameless::Nameless;
@@ -307,6 +308,15 @@ fn format_impl(
     // reindent every line (whole-file format).
     let touched_mask = touched.map(|t| touched_line_mask(&parsed.data, &index, count, t));
 
+    // Lines whose first token is a line comment — the Clojure engine leaves these
+    // exactly as written (cljfmt / `phel format` never reindent a comment-only
+    // line). Taken from the lexer trivia, which classifies both `;` (Clojure/…)
+    // and `#` (Phel) line comments and disambiguates `#(` / `#{` (ADR feedback
+    // 0007). Only built for that engine; the Emacs family keeps its own rule.
+    let preserve_comment_line = matches!(engine, Engine::Clojure)
+        .then(|| comment_only_lines(source, &index, &opts))
+        .unwrap_or_default();
+
     let mut lines: Vec<String> = Vec::with_capacity(count);
     for n in 1..=count as u32 {
         let range = index.line_range(n).expect("n within line_count");
@@ -327,6 +337,13 @@ fn format_impl(
             lines.push(String::new());
         } else if in_string(&parsed.data, range.start) {
             // Inside a multi-line string: leave the line byte-identical.
+            new_indent[i] = old_indent[i];
+            lines.push(content.to_string());
+        } else if preserve_comment_line.contains(&n) {
+            // Clojure/Phel (and the induced-table dialects on this engine) never
+            // reindent a comment-only line — `cljfmt` and `phel format` leave its
+            // column exactly as written, whatever it is. Only the Emacs-family
+            // engines apply Emacs's `;`/`;;`/`;;;` rule below.
             new_indent[i] = old_indent[i];
             lines.push(content.to_string());
         } else if trimmed.starts_with(";;;") {
@@ -386,6 +403,27 @@ fn format_impl(
         }
     }
     lines.join("\n")
+}
+
+/// The 1-based line numbers whose first non-whitespace token is a line comment
+/// (`;` in Clojure/…, `#` in Phel) — comment-only lines. Derived from the lexer
+/// trivia (`lex`), which correctly distinguishes a `#` comment from a `#(`/`#{`
+/// dispatch. A line with code before its comment is *not* included (its comment
+/// is trailing, which the formatter leaves alone anyway).
+fn comment_only_lines(source: &str, index: &LineIndex, opts: &Options) -> HashSet<u32> {
+    let mut set = HashSet::new();
+    for token in lex(source, opts) {
+        if matches!(token.kind, TokenKind::LineComment) {
+            let start = token.span.start;
+            let (line, _) = index.offset_to_line_col(start);
+            if let Some(range) = index.line_range(line) {
+                if source[range.start..start as usize].trim().is_empty() {
+                    set.insert(line);
+                }
+            }
+        }
+    }
+    set
 }
 
 /// Render an indent of `col` columns as spaces, or as tabs plus trailing spaces

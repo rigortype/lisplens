@@ -34,10 +34,14 @@ comments.
 - **On lispexp:** nothing to do. The trivia is already there and sufficient. (A
   *convenience* — comment tokens surfaced on the tree, or a ready-made "comments with
   attachment" view — would be ergonomic sugar, not a capability gap; not requested.)
-- **On lisplens:** the inline-comment-alignment / comment-line-indentation work is a
-  lisplens-side TODO (it would consume `lex()`), tracked in the formatter's Deferred
-  list (`docs/dev/formatter.md`, `docs/CURRENT_WORKS.md`). It is **not** blocked on
-  lispexp.
+- **On lisplens:** **done** — the formatter now consumes `lex()` for comment-line
+  handling (`comment_only_lines` in `src/format/mod.rs`). The verified fidelity gap
+  turned out to be *over*-reindenting: the Clojure engine (Clojure/Phel/…) now leaves
+  comment-only lines where written, matching `cljfmt`/`phel format` byte-exact, using
+  the lexer to classify each dialect's comment char (`;`, Janet's `#`). Trailing-comment
+  column *alignment* was declined — Emacs `indent-region`, `cljfmt`, and `phel format`
+  all leave trailing comments untouched, so the prior byte-preserving behaviour was
+  already faithful.
 
 Recorded so a future contributor does not file this as an upstream need — the answer
-is already "use `lex()`."
+was "use `lex()`", now consumed.
