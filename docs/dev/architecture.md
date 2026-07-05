@@ -24,6 +24,7 @@ content-hash **anchor** for any target, and edit by anchor.
 | `search` | `find_definitions` / `find_symbol` (code-vs-data via lispexp `walk`) + text renderers (ADR-0010) |
 | `config` | resolve `indent-tabs-mode`/`tab-width` from file-local/dir-locals/EditorConfig (ADR-0029); file-local + dir-local *parsing* delegated to `lispexp_emacs::{local_vars,dir_locals}` (lispexp ADR-0033), EditorConfig stays in-tree |
 | `format` | native Lisp indenter, dialect-dispatched: shared driver + an `Engine` per bundled Emacs indenter (Emacs Lisp `lisp-indent-function`; Common Lisp `common-lisp-indent-function` in `format/commonlisp.rs`; Scheme family `scheme-indent-function` in `format/scheme.rs`; generic fallback for the rest) — see `formatter.md`; Emacs Lisp bundled table from `lispexp_emacs::indent::bundled_table` (ADR-0011/0025-0028/**0031**; crate split lispexp ADR-0033) |
+| `parinfer` | native parinfer-style whole-buffer transform (ADR-0045): `run(Request)->Answer`, stateless, stdin→stdout. Paren mode = balance-checked faithful reindent (reuses `format`); balance-*generating* safety (success=clean, failure=input unchanged + diagnostic). Indent mode / Nameless interpretation are follow-ups |
 | `mcp` | minimal stdio JSON-RPC MCP server (ADR-0020) |
 | `lib` | Lens: `outline`/`expand` (+ `_text`), `dialect_for_path`/`recognized_dialect`, `disappeared_definitions`; re-exports `Dialect` |
 | `main` | CLI dispatch |
@@ -39,6 +40,7 @@ line   edit <file>          apply Line-hash patch from stdin (replace/delete/ins
 find <name> [dir]           definitions by name
 refs <name> [dir]           symbol occurrences (code/data tagged)
 format <file>               reindent a Lisp file (native, by dialect; honors config)
+parinfer <mode>             parinfer-style transform, stdin→stdout (paren mode; ADR-0045)
 check  <file>               parse-check (diagnostics; non-zero exit on errors, ADR-0032)
 rename <old> <new> <file>   rename a symbol across a file (symbol-exact, safe, ADR-0032)
 inline <name> <file>        inline a function at its call sites (safe subset, ADR-0032)
@@ -47,7 +49,7 @@ extract <file> <anchor> <name> [param...]   pull a form into a new function (ADR
 mcp                         MCP server over stdio
 ```
 MCP tools mirror the CLI: `struct_read`/`line_read`/`struct_edit`/`line_edit`/
-`find`/`refs`/`format`/`check`/`rename`/`inline`/`rewrite`/`extract`. Edit tools
+`find`/`refs`/`format`/`parinfer`/`check`/`rename`/`inline`/`rewrite`/`extract`. Edit tools
 take a `patch`/`spec` string (ADR-0019's JSON op-array is a future option).
 
 ## Patch DSL (ADR-0021)

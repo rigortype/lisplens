@@ -13,6 +13,7 @@ pub mod hash;
 pub mod linehash;
 pub mod mcp;
 pub mod nameless;
+pub mod parinfer;
 pub mod patch;
 pub mod refactor;
 pub mod resolve;

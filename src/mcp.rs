@@ -126,6 +126,20 @@ fn tools() -> Value {
             &["file"]
         ),
         tool(
+            "parinfer",
+            "Parinfer-style transform of Lisp *text* (not a file). paren mode: require balance, then reindent faithfully (Emacs-native, Nameless-aware). Returns a JSON answer {text, success, error, cursorX, cursorLine}; on failure text is the unchanged input",
+            json!({
+                "mode": json!({ "type": "string", "enum": ["paren"], "description": "paren = balance-checked faithful reindent" }),
+                "text": json!({ "type": "string", "description": "the buffer text to transform" }),
+                "dialect": json!({ "type": "string", "description": "dialect, kebab-case (default emacs-lisp)" }),
+                "nameless": json!({ "type": "boolean", "description": "enable the Nameless overlay (Emacs Lisp only)" }),
+                "name": json!({ "type": "string", "description": "filename hint for Nameless current-name discovery" }),
+                "cursorLine": json!({ "type": "integer", "description": "0-based cursor line (optional)" }),
+                "cursorX": json!({ "type": "integer", "description": "0-based cursor column (optional)" })
+            }),
+            &["mode", "text"]
+        ),
+        tool(
             "rename",
             "Rename a symbol across a file (symbol-exact, safe)",
             json!({ "file": file, "from": from, "to": to }),
@@ -246,6 +260,49 @@ fn run_tool(name: &str, args: &Value) -> Result<String, String> {
             } else {
                 crate::diagnostics_text(file, &diagnostics)
             })
+        }
+        "parinfer" => {
+            let mode_name = arg(args, "mode")?;
+            let mode = crate::parinfer::Mode::from_name(mode_name)
+                .ok_or_else(|| format!("unknown mode `{mode_name}` (expected: paren)"))?;
+            let text = arg(args, "text")?.to_string();
+            let dialect = match args.get("dialect").and_then(Value::as_str) {
+                Some(d) => d
+                    .parse::<crate::Dialect>()
+                    .map_err(|_| format!("unknown dialect `{d}`"))?,
+                None => crate::Dialect::EmacsLisp,
+            };
+            let nameless_on = args
+                .get("nameless")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let name_hint = args.get("name").and_then(Value::as_str);
+            let cursor = match (
+                args.get("cursorLine").and_then(Value::as_u64),
+                args.get("cursorX").and_then(Value::as_u64),
+            ) {
+                (Some(line), Some(x)) => Some(crate::parinfer::Cursor {
+                    line: line as usize,
+                    x: x as usize,
+                }),
+                _ => None,
+            };
+            let mut config = crate::config::FormatConfig::default();
+            config.nameless |= nameless_on;
+            let nameless = if config.nameless && dialect == crate::Dialect::EmacsLisp {
+                Some(crate::nameless::Nameless::for_file(name_hint.unwrap_or("")))
+            } else {
+                None
+            };
+            let answer = crate::parinfer::run(&crate::parinfer::Request {
+                mode,
+                text: &text,
+                dialect,
+                config,
+                nameless,
+                cursor,
+            });
+            Ok(crate::parinfer::answer_to_json(&answer).to_string())
         }
         "rename" => {
             let file = arg(args, "file")?;
@@ -436,6 +493,29 @@ mod tests {
         assert!(names.contains(&"check"));
         assert!(names.contains(&"rewrite"));
         assert!(names.contains(&"extract"));
+        assert!(names.contains(&"parinfer"));
+    }
+
+    #[test]
+    fn parinfer_tool_reindents_text_and_returns_json_answer() {
+        let out = run_tool(
+            "parinfer",
+            &json!({ "mode": "paren", "text": "(defun f (x)\n(+ x\n1))\n" }),
+        )
+        .unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["success"], json!(true));
+        assert_eq!(v["error"], Value::Null);
+        assert_eq!(v["text"], json!("(defun f (x)\n  (+ x\n     1))\n"));
+    }
+
+    #[test]
+    fn parinfer_tool_refuses_imbalance_unchanged() {
+        let out = run_tool("parinfer", &json!({ "mode": "paren", "text": "(a\n" })).unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["success"], json!(false));
+        assert_eq!(v["text"], json!("(a\n"), "input returned unchanged");
+        assert_eq!(v["error"]["name"], json!("unclosed-paren"));
     }
 
     #[test]

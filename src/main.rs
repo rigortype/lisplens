@@ -81,6 +81,7 @@ fn main() -> ExitCode {
         ["refs", name] => run_refs(name, "."),
         ["refs", name, dir] => run_refs(name, dir),
         ["format", args @ ..] => run_format(args),
+        ["parinfer", rest @ ..] => run_parinfer(rest),
         ["check", file] => run_check(PathBuf::from(file)),
         ["rename", from, to, file] => run_rename(from, to, PathBuf::from(file)),
         ["inline", name, file] => run_inline(name, PathBuf::from(file)),
@@ -242,6 +243,143 @@ fn run_format(args: &[&str]) -> ExitCode {
         }
     }
     ExitCode::SUCCESS
+}
+
+/// `lisplens parinfer <mode> [flags]` — a native parinfer-style transform
+/// (ADR-0045). Reads the buffer from stdin, writes the transformed text to
+/// stdout; `--json` emits the structured `{text, success, error, cursorX,
+/// cursorLine}` result instead. On failure the input is echoed unchanged (safe
+/// no-op for a stdin→stdout filter) with a stderr diagnostic + non-zero exit.
+///
+/// Flags: `--json`, `--nameless`, `--name NAME`/`--file PATH` (Nameless
+/// current-name hint; `--file` also sources indentation config), `--cursor-line
+/// N`/`--cursor-x M` (0-based). `--dialect` is consumed globally (default Emacs
+/// Lisp, since fileless stdin has no extension).
+fn run_parinfer(args: &[&str]) -> ExitCode {
+    // Normalize `--k=v` into `--k`, `v` so both spellings work.
+    let mut norm: Vec<&str> = Vec::new();
+    for a in args {
+        if a.starts_with("--") {
+            if let Some(eq) = a.find('=') {
+                norm.push(&a[..eq]);
+                norm.push(&a[eq + 1..]);
+                continue;
+            }
+        }
+        norm.push(a);
+    }
+
+    let mut mode_name: Option<&str> = None;
+    let mut json = false;
+    let mut nameless = false;
+    let mut name_hint: Option<&str> = None;
+    let mut file_hint: Option<&str> = None;
+    let mut cursor_line: Option<usize> = None;
+    let mut cursor_x: Option<usize> = None;
+    let mut i = 0;
+    while i < norm.len() {
+        match norm[i] {
+            "--json" => json = true,
+            "--nameless" => nameless = true,
+            "--name" => {
+                name_hint = norm.get(i + 1).copied();
+                i += 1;
+            }
+            "--file" => {
+                file_hint = norm.get(i + 1).copied();
+                i += 1;
+            }
+            "--cursor-line" => {
+                cursor_line = norm.get(i + 1).and_then(|s| s.parse().ok());
+                i += 1;
+            }
+            "--cursor-x" => {
+                cursor_x = norm.get(i + 1).and_then(|s| s.parse().ok());
+                i += 1;
+            }
+            flag if flag.starts_with("--") => {
+                eprintln!("lisplens: parinfer: unknown flag `{flag}`");
+                return ExitCode::FAILURE;
+            }
+            other => {
+                if mode_name.is_none() {
+                    mode_name = Some(other);
+                }
+            }
+        }
+        i += 1;
+    }
+
+    let Some(mode_name) = mode_name else {
+        eprintln!("lisplens: parinfer: no mode given (expected: paren)");
+        return ExitCode::FAILURE;
+    };
+    let Some(mode) = lisplens::parinfer::Mode::from_name(mode_name) else {
+        eprintln!("lisplens: parinfer: unknown mode `{mode_name}` (expected: paren)");
+        return ExitCode::FAILURE;
+    };
+
+    let Some(input) = read_stdin() else {
+        return ExitCode::FAILURE;
+    };
+
+    // Dialect: the global `--dialect` override, else Emacs Lisp (fileless stdin).
+    let dialect = DIALECT_OVERRIDE
+        .get()
+        .copied()
+        .flatten()
+        .unwrap_or(lisplens::Dialect::EmacsLisp);
+
+    // Config: resolve from a file hint when given (file-locals / dir-locals /
+    // EditorConfig), else defaults. `--nameless` forces the overlay on.
+    let mut config = match file_hint {
+        Some(path) => lisplens::config::resolve(Path::new(path), &input),
+        None => lisplens::config::FormatConfig::default(),
+    };
+    config.nameless |= nameless;
+
+    // Nameless overlay (Emacs Lisp only): current-name from the name hint, or the
+    // file hint's basename, treated as a filename the way Nameless discovers it.
+    let nameless_ctx = if config.nameless && dialect == lisplens::Dialect::EmacsLisp {
+        let hint = name_hint
+            .or_else(|| file_hint.and_then(|p| Path::new(p).file_name().and_then(|s| s.to_str())))
+            .unwrap_or_default();
+        Some(lisplens::nameless::Nameless::for_file(hint))
+    } else {
+        None
+    };
+
+    let cursor = match (cursor_line, cursor_x) {
+        (Some(line), Some(x)) => Some(lisplens::parinfer::Cursor { line, x }),
+        _ => None,
+    };
+
+    let request = lisplens::parinfer::Request {
+        mode,
+        text: &input,
+        dialect,
+        config,
+        nameless: nameless_ctx,
+        cursor,
+    };
+    let answer = lisplens::parinfer::run(&request);
+
+    if json {
+        // Structured result; success is carried in the payload, so exit 0.
+        print!("{}", lisplens::parinfer::answer_to_json(&answer));
+        return ExitCode::SUCCESS;
+    }
+    print!("{}", answer.text);
+    match &answer.error {
+        None => ExitCode::SUCCESS,
+        Some(e) => {
+            eprintln!(
+                "lisplens: parinfer: {}:{}: {} ({})",
+                e.line, e.x, e.message, e.name
+            );
+            ExitCode::FAILURE
+        }
+    }
 }
 
 fn run_check(path: PathBuf) -> ExitCode {
@@ -506,6 +644,7 @@ usage:
   lisplens find <name> [dir]    find definitions by name (default dir: .)
   lisplens refs <name> [dir]    find symbol occurrences (code/data tagged)
   lisplens format [--nameless] [--tonsky] <file>  reindent a Lisp file (native, by dialect; --tonsky = Clojure fixed style)
+  lisplens parinfer paren [--json] [--nameless] [--name N|--file P] [--cursor-line N --cursor-x M]  parinfer-style transform of stdin->stdout (ADR-0045)
   lisplens check <file>         parse-check a Lisp file (diagnostics; non-zero on errors)
   lisplens rename <old> <new> <file>   rename a symbol across a file (symbol-exact, safe)
   lisplens inline <name> <file>        inline a function at its call sites (safe subset)
