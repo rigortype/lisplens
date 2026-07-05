@@ -60,9 +60,11 @@ future interactive layer).
   construction) and drives a stack of open delimiters keyed by their **display
   column**; each line's leading indentation closes every open delimiter at or to
   the right of it, and each line's movable trailing close-parens are re-derived
-  rather than trusted. Indentation itself is never rewritten. Nameless-aware
-  column *interpretation* (reading the displayed, composed columns — the headline
-  win over parinfer-rust-emacs) is the follow-up, issue #26.
+  rather than trusted. Indentation itself is never rewritten. When the Nameless
+  overlay is enabled, those columns are measured as they **display** (a composed
+  prefix like `php-`→`:` counts as its shorter glyph, via `Nameless::saving`), so
+  indentation is interpreted the way a Nameless user sees it — the headline win
+  over parinfer-rust-emacs, which reads raw columns and mis-nests such code.
 - **Smart mode** — out of scope: it needs `changes`/cursor history, which the
   stateless model does not carry.
 
@@ -96,13 +98,13 @@ accepted
   self-contained token-scan pass over `lispexp::lex()` with its own display-width
   column measurement (`col_at`), kept separate from the formatter's perf-tuned
   `Cols` rather than refactoring it.
-- The result shape and error taxonomy are shared by both modes. Indent mode's one
-  remaining extension is Nameless-aware column *interpretation* (#26), a thin
-  overlay on `col_at`.
+- The result shape and error taxonomy are shared by both modes.
 - Nameless is threaded as an Emacs-Lisp-only overlay via the existing
   `FormatConfig.nameless` + `Nameless::for_file` path. In paren mode it affects
-  column *generation*; indent mode will additionally use `Nameless::saving` for
-  column *interpretation* (#26).
+  column *generation* (reusing the formatter); in indent mode it affects column
+  *interpretation* — `display_col` subtracts `Nameless::saving` for composed
+  prefixes earlier on the line, collected from the `Atom` tokens in the `lex()`
+  scan, so indentation and open-paren columns are read in displayed columns.
 - Documented indent-mode limitations (parked, not blockers): comment-only lines
   make no indentation decision (a closer is never placed on a comment line); a
   line whose *start* is inside a multi-line string/comment is emitted verbatim, so
