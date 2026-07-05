@@ -84,6 +84,7 @@ fn main() -> ExitCode {
         ["check", file] => run_check(PathBuf::from(file)),
         ["rename", from, to, file] => run_rename(from, to, PathBuf::from(file)),
         ["inline", name, file] => run_inline(name, PathBuf::from(file)),
+        ["docstring", name, file] => run_docstring(name, PathBuf::from(file)),
         ["rewrite", file] => run_rewrite(PathBuf::from(file)),
         ["extract", file, anchor, name, params @ ..] => {
             run_extract(PathBuf::from(file), anchor, name, params)
@@ -298,6 +299,27 @@ fn run_inline(name: &str, path: PathBuf) -> ExitCode {
     }
 }
 
+fn run_docstring(name: &str, path: PathBuf) -> ExitCode {
+    let Some(text) = read_stdin() else {
+        return ExitCode::FAILURE;
+    };
+    let dialect = resolve_dialect(&path);
+    match lisplens::refactor::set_docstring_in_file(&path, name, &text, dialect) {
+        Ok(outcome) => {
+            let verb = match outcome.action {
+                lisplens::refactor::DocstringAction::Inserted => "set",
+                lisplens::refactor::DocstringAction::Replaced => "replaced",
+            };
+            println!("{verb} docstring on `{name}`  {}", outcome.new_file_hash);
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("lisplens: {}: {err}", path.display());
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn run_rewrite(path: PathBuf) -> ExitCode {
     let Some(spec) = read_stdin() else {
         return ExitCode::FAILURE;
@@ -487,6 +509,7 @@ usage:
   lisplens check <file>         parse-check a Lisp file (diagnostics; non-zero on errors)
   lisplens rename <old> <new> <file>   rename a symbol across a file (symbol-exact, safe)
   lisplens inline <name> <file>        inline a function at its call sites (safe subset)
+  lisplens docstring <name> <file>     set/replace a function-like def's docstring (text on stdin)
   lisplens rewrite <file>       structural pattern->template rewrite (spec on stdin)
   lisplens extract <file> <anchor> <name> [param...] [--count N] [--kind HEAD] [--all] [--also ANCHOR]  pull a form (or a run of N) into a new function
   lisplens mcp                  run the MCP server over stdio
