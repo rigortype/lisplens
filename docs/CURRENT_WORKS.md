@@ -4,42 +4,33 @@ Ephemeral snapshot. **Durable knowledge is in the dev docs** (see `AGENTS.md` �
 Codebase): `docs/dev/architecture.md`, `docs/dev/formatter.md`, `CONTEXT.md`,
 `docs/adr/`.
 
-## Handoff — resume here: live-parinfer editor initiative (issues #30–33)
+## Handoff — resume here: 0.4.0 released; parinfer line is an experimental preview
 
-**Now in flight — live parinfer for Emacs (issues #30–33).** After the #24–26 arc
-shipped the stateless `parinfer` command, the next initiative is the Emacs editor
-integration, pinned in a grilling/design session. Decision: a **new native Emacs
-minor-mode** (`emacs/lisplens-parinfer.el`) — *not* a fork of `parinfer-rust-mode`
-(which loads an in-process dynamic module and is built around incremental smart mode;
-lisplens is a CLI subprocess with a stateless whole-buffer transform — as-is is
-impossible, a fork is mostly deletion). For the live per-keystroke UX, lisplens keeps
-**one shared persistent process** per Emacs and the mode talks to it. Four slices, all
-`ready-for-agent`: **#30** `lisplens parinfer --server` (persistent line-delimited JSON
-server, stateless per-request, reuses `parinfer::run`) → **#31** minimal cursor-line
-paren-trail protection in indent mode (the one parinfer cursor rule needed for live —
-leave the cursor line's trail alone; not full smart mode) → **#32** the minor-mode with
-explicit commands over the server (marker/undo-safe replace, dialect from major-mode,
-Nameless opt-in) → **#33** live fire-on-edit (`post-command-hook`, debounced, cursor
-protection in effect). Deps: #30→#32, #31 independent, {#32,#31}→#33. A new ADR covers
-the server protocol + editor-server model; ADR-0045 gains the cursor-protection rule.
-**#30 + #31 shipped** (this branch, one PR): `parinfer --server` (persistent line-delimited
-JSON; `run_json`/`run_json_line` shared with the MCP tool; a malformed line → error answer,
-never desyncs) + indent-mode cursor-line trail protection (locks the cursor line's trail,
-yields to the balance guarantee when needed). ADR-0046 added; ADR-0045 updated. **#32
-shipped** (this branch): the companion Emacs package `emacs/lisplens-parinfer.el` — drives
-one shared `parinfer --server` process; `lisplens-parinfer-paren`/`-indent` (+ a minor
-mode) transform the buffer/region with marker/point-preserving replace, dialect from
-major-mode, Nameless opt-in, refuse-unchanged on failure. Byte-compiles clean on Emacs 32;
-smoke-tested end-to-end (indent infers closers, paren reindents, unbalanced untouched,
-point survives, one process reused). `emacs/` excluded from the published crate. **#33
-shipped** (this branch): `lisplens-parinfer-mode` is now a **live** minor mode —
-`post-command-hook` (debounced via an idle timer, fires only when the buffer changed)
-runs indent live so parens follow indentation as you type; refusals (mid-edit unbalanced)
-are silent, the #31 cursor protection keeps point's trail stable, and disabling removes
-the hook + stops the shared process when no buffer uses it. **The live-parinfer arc
-(#30–33) is complete** — server + cursor protection + Emacs mode + live firing, all
-shipped. Candidate follow-ups: defun-scoped live transforms for very large buffers;
-smart mode; MELPA packaging of the Emacs front-end.
+**Where.** On **`master`**, clean, at the release commit `de78901` (merge of PR #38,
+tagged **`v0.4.0`**). crates.io + the 5-platform GitHub Release binaries are live and
+verified (see the "Released 0.4.0" bullet under **Now**).
+
+**What 0.4.0 shipped.** Two lines. **Stable:** the `islisp-eisl` opt-in ISLisp indent
+style (ADR-0042) and the Clojure/Phel comment-only-line fidelity fix (the formatter now
+leaves comment lines where cljfmt/phel do — the last cross-cutting formatter gap, closed
+and re-validated on ~250 real Clojure files). **Experimental preview — the `parinfer`
+line (arc #24–33, all merged):** lisplens's own parinfer alternative — the `parinfer`
+command (paren/indent, ADR-0045), the MCP tool, the persistent `parinfer --server`
+(ADR-0046), cursor-line protection, and the companion Emacs package
+`emacs/lisplens-parinfer.el` (a live minor-mode, requires Emacs 29.1+). The engine is
+tested (211 tests); the changelog marks the whole line `(preview)`.
+
+**The one open thread: verify parinfer on real Emacs.** The Emacs companion is
+byte-compile-clean and batch-smoke-tested but **not yet exercised in an interactive
+Emacs session** — this is the gate before the parinfer line can be declared stable and
+announced in the README (both deliberately deferred at 0.4.0). That verification is the
+natural next step.
+
+**Candidate follow-ups (nothing blocking):** verify + announce parinfer on real Emacs
+(then add it to the README and drop the `(preview)` markers); parinfer follow-ups
+(defun-scoped live transforms for large buffers, smart mode, MELPA packaging); the parked
+formatter items in **Deferred** below (the `#_`-on-own-line / `#_#_` Clojure residual;
+Racket infix dot; the MCP edit JSON op-array).
 
 ## Prior arc (done): 0.3.0 release + the stateless parinfer command
 
@@ -156,6 +147,18 @@ free-var **inference**, skeleton auto-discovery for `--also`, multi-*file* extra
 
 ## Now
 
+- **Released 0.4.0** (2026-07-06) — a **stable + preview** release. Stable: the
+  `islisp-eisl` opt-in ISLisp indent style (ADR-0042) and the Clojure/Phel
+  comment-only-line fidelity fix (formatter leaves comment lines where cljfmt/phel do,
+  via `lex()` trivia — the last cross-cutting gap; re-validated byte-exact on ~250 real
+  files from jsonista/reitit/next-jdbc/clj-kondo). Preview (experimental, marked
+  `(preview)` in the changelog): the whole **parinfer** line — the `parinfer` command
+  (paren/indent, ADR-0045), MCP tool, persistent `parinfer --server` (ADR-0046),
+  cursor-line protection, and the Emacs companion `emacs/lisplens-parinfer.el` (live
+  minor-mode, Emacs 29.1+). The engine is tested (211 tests); the Emacs integration is
+  **not yet verified on real Emacs**, so it is not announced in the README yet. Tag
+  `v0.4.0` (release commit `de78901`, merge PR #38); crates.io + GitHub Release
+  (5-platform binaries) live and verified. 211 tests, 46 ADRs.
 - **lispexp 0.7.0 + lispexp-emacs 0.2.0 consumed — Phel branch unblocked**
   (commit `2793692`). The four blocking feedback notes (0003 `#_`/`#;` discards;
   0004/0005/0006 Phel `;`-in-symbol / `|(…)` / `\Foo\Bar` FQN) are all **resolved
