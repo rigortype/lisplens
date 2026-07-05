@@ -7,6 +7,7 @@
 
 pub mod apply;
 pub mod config;
+pub mod diff;
 pub mod edit;
 pub mod format;
 pub mod hash;
@@ -90,7 +91,7 @@ pub fn outline(source: &str, dialect: Dialect) -> Vec<OutlineEntry> {
 /// A method's Dispatch signature (ADR-0022): its verbatim qualifiers, a Clojure
 /// dispatch value, and its specializer tokens. `None` if the form carries none
 /// of these (i.e. it is not a method).
-fn dispatch_signature(source: &str, form: &Annotated) -> Option<String> {
+pub(crate) fn dispatch_signature(source: &str, form: &Annotated) -> Option<String> {
     let mut parts: Vec<String> = Vec::new();
     for qualifier in form.all(Role::Qualifier) {
         parts.push(span_text(source, qualifier).to_string());
@@ -235,14 +236,14 @@ fn preview(text: &str) -> String {
 }
 
 /// The verbatim source bytes of `datum`'s span.
-fn span_bytes<'a>(source: &'a str, datum: &Datum) -> &'a [u8] {
+pub(crate) fn span_bytes<'a>(source: &'a str, datum: &Datum) -> &'a [u8] {
     &source.as_bytes()[datum.span.start as usize..datum.span.end as usize]
 }
 
 /// A definition's name as text: a bare name symbol (`(define pi …)` → `pi`), or
 /// the head of a `(name args…)` definition target (`(define (square x) …)` →
 /// `square`).
-fn name_text(datum: &Datum) -> Option<String> {
+pub(crate) fn name_text(datum: &Datum) -> Option<String> {
     match &datum.kind {
         DatumKind::Symbol(s) => Some((*s).to_string()),
         DatumKind::List { items, .. } => match &items.first()?.kind {

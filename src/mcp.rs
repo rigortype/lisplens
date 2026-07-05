@@ -126,6 +126,16 @@ fn tools() -> Value {
             &["file"]
         ),
         tool(
+            "diff",
+            "Structural diff of two file versions at top-level definition granularity (ADR-0047): which definitions were added/removed/changed, modulo formatting (whitespace/comment churn is not a change). Returns terse grouped text, or a JSON object {changed, added, removed, otherFormsChanged} when `json` is true",
+            json!({
+                "old": json!({ "type": "string", "description": "path to the old/base version" }),
+                "new": json!({ "type": "string", "description": "path to the new version" }),
+                "json": json!({ "type": "boolean", "description": "return the structured JSON diff instead of text (default false)" })
+            }),
+            &["old", "new"]
+        ),
+        tool(
             "parinfer",
             "Parinfer-style transform of Lisp *text* (not a file). paren = require balance then reindent faithfully (Emacs-native, Nameless-aware); indent = indentation is authoritative, infer close-parens from it. Returns a JSON answer {text, success, error, cursorX, cursorLine}; on failure text is the unchanged input",
             json!({
@@ -265,6 +275,21 @@ fn run_tool(name: &str, args: &Value) -> Result<String, String> {
         // `run_json` — `{mode, text, dialect?, nameless?, name?, cursor*}` in, the
         // `{text, success, error, cursor*}` answer out (bad input → success:false).
         "parinfer" => Ok(crate::parinfer::run_json(args).to_string()),
+        "diff" => {
+            let old = arg(args, "old")?;
+            let new = arg(args, "new")?;
+            let old_src = read(old)?;
+            let new_src = read(new)?;
+            let dialect = dialect_for_path(Path::new(new));
+            let diff = crate::diff::diff_files(&old_src, &new_src, dialect);
+            Ok(
+                if args.get("json").and_then(Value::as_bool).unwrap_or(false) {
+                    crate::diff::diff_json(&diff).to_string()
+                } else {
+                    crate::diff::diff_text(&diff)
+                },
+            )
+        }
         "rename" => {
             let file = arg(args, "file")?;
             let from = arg(args, "from")?;

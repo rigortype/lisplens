@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **`diff` — structural diff of two file versions by definition** (ADR-0047). `lisplens diff <old> <new>` (and the MCP `diff` tool) reports which top-level definitions were **added / removed / changed** between two versions, so an agent can see *which* units changed before drilling into how. Definitions are matched by `(kind, name, dispatch-signature?)` — two `cl-defmethod`s of one generic stay distinct — and a unit counts as *changed* only when it is not structurally equal **modulo formatting**, so reindentation or comment churn is never a change. A rename shows as one removed + one added unit (no rename detection); top-level non-definition forms (`require`, `provide`, …) are summarized in one line rather than diffed individually. Output is terse grouped text, or a structured `--json` object `{changed, added, removed, otherFormsChanged}` with an editing anchor (`line:hash`) on each entry. Exit code is 0 whether or not there are differences (non-zero is reserved for real errors). Verified on Emacs's `cc-engine.el` from emacs-30 → emacs-31.
+
 ## [0.4.0] - 2026-07-06
 
 This release pairs stable formatter work with an experimental new line. On the stable side, the Clojure engine now leaves comment-only lines exactly where `cljfmt` and `phel format` do — closing the last cross-cutting formatter fidelity gap — and ISLisp gains an opt-in EISL indent style. The experimental line is lisplens's own **parinfer** alternative: a paren/indent transform exposed on the CLI, as an MCP tool, and through a persistent server, plus a companion Emacs minor-mode. **The parinfer line ships as a preview** — its engine is tested (200+ unit tests), but the Emacs integration has not yet been verified on real Emacs, so it is intentionally not yet announced in the README; expect rough edges and possible interface changes before it is declared stable.

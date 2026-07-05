@@ -50,6 +50,15 @@ aided by a *textual*-diff signal, a promising future combination) is kept out of
 the core: its threshold uncertainty does not belong in the foundation, and the
 north star is the *content* change of a matched unit, not rename tracking.
 
+**A key can repeat within one file.** Emacs code routinely carries a
+`(defvar x)` forward declaration and a later `(defvar x nil)` — same
+`(kind, name)` key, two genuinely distinct forms. Matching keeps a *list* per key
+(not one instance) and pairs within it by consuming `struct_eq`-equal instances
+first (unchanged), then pairing the remainder positionally (changed) with the tail
+as added/removed. Keeping a single instance per key mispairs the duplicates and
+falsely reports a change even when a file is diffed against itself — the empty
+self-diff is the invariant this protects.
+
 ## Changed predicate
 
 A unit is **changed** iff it is present in both versions and **not
@@ -78,7 +87,9 @@ dialect mismatch), consistent with lisplens's own `check` convention rather than
 
 ## Status
 
-proposed
+accepted
 
-(Pre-drafted from a spec grilling; the implementing agent — GitHub issue #40 —
-flips this to `accepted` and reconciles any wording with what shipped.)
+The definition-level model here shipped as the `diff` command / MCP tool
+(`src/diff.rs`), verified on `cc-engine.el` emacs-30 → emacs-31. Drilling a
+changed unit's internals (`--deep` / `--unit`) is the ADR-0048 tree diff, a
+later slice.

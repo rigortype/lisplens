@@ -97,6 +97,7 @@ fn main() -> ExitCode {
         ["format", args @ ..] => run_format(args),
         ["parinfer", rest @ ..] => run_parinfer(rest),
         ["check", file] => run_check(PathBuf::from(file)),
+        ["diff", rest @ ..] => run_diff(rest),
         ["rename", from, to, file] => run_rename(from, to, PathBuf::from(file)),
         ["inline", name, file] => run_inline(name, PathBuf::from(file)),
         ["docstring", name, file] => run_docstring(name, PathBuf::from(file)),
@@ -141,6 +142,50 @@ fn run_line_read(path: PathBuf) -> ExitCode {
         "{}",
         lisplens::linehash::read(&path.display().to_string(), &source)
     );
+    ExitCode::SUCCESS
+}
+
+/// `diff <old> <new> [--json]` — Structural diff at definition granularity
+/// (ADR-0047). Exit code is 0 whether or not there are differences; non-zero is
+/// reserved for real errors (missing file, etc.).
+fn run_diff(args: &[&str]) -> ExitCode {
+    let mut json = false;
+    let mut files: Vec<&str> = Vec::new();
+    for arg in args {
+        match *arg {
+            "--json" => json = true,
+            flag if flag.starts_with('-') => {
+                eprintln!("lisplens: diff: unknown flag `{flag}`");
+                return ExitCode::FAILURE;
+            }
+            file => files.push(file),
+        }
+    }
+    let [old, new] = files.as_slice() else {
+        eprintln!("lisplens: usage: diff <old> <new> [--json]");
+        return ExitCode::FAILURE;
+    };
+    let old_src = match std::fs::read_to_string(old) {
+        Ok(s) => s,
+        Err(err) => {
+            eprintln!("lisplens: {old}: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let new_src = match std::fs::read_to_string(new) {
+        Ok(s) => s,
+        Err(err) => {
+            eprintln!("lisplens: {new}: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let dialect = resolve_dialect(Path::new(new));
+    let diff = lisplens::diff::diff_files(&old_src, &new_src, dialect);
+    if json {
+        println!("{}", lisplens::diff::diff_json(&diff));
+    } else {
+        print!("{}", lisplens::diff::diff_text(&diff));
+    }
     ExitCode::SUCCESS
 }
 
@@ -693,6 +738,7 @@ usage:
   lisplens parinfer <paren|indent> [--json] [--nameless] [--name N|--file P] [--cursor-line N --cursor-x M]  parinfer-style transform of stdin->stdout (ADR-0045)
   lisplens parinfer --server    persistent line-delimited JSON parinfer server for editors (ADR-0046)
   lisplens check <file>         parse-check a Lisp file (diagnostics; non-zero on errors)
+  lisplens diff <old> <new> [--json]   structural diff of two versions by definition (ADR-0047)
   lisplens rename <old> <new> <file>   rename a symbol across a file (symbol-exact, safe)
   lisplens inline <name> <file>        inline a function at its call sites (safe subset)
   lisplens docstring <name> <file>     set/replace a function-like def's docstring (text on stdin)
