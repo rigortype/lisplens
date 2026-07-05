@@ -4,20 +4,24 @@ Ephemeral snapshot. **Durable knowledge is in the dev docs** (see `AGENTS.md` �
 Codebase): `docs/dev/architecture.md`, `docs/dev/formatter.md`, `CONTEXT.md`,
 `docs/adr/`.
 
-## Handoff — resume here: 0.2.0 is released; pick from the candidate work below
+## Handoff — resume here: 0.3.0 is released; pick from the candidate work below
 
 **Where.** On **`master`**, clean, at the release commit
-`7350b32 Bump up version to 0.2.0` (tagged **`v0.2.0`**). PR #11 (Phel engine +
-lispexp 0.7.0 consumption) is **merged** (merge `53fb6f4`); the whole Clojure/Phel
-formatter line (PRs #7–#11, ADR-0039/0040/0041) and the refactoring commands
-(ADR-0032–0038) are on master and shipped in 0.2.0. Nothing is in flight.
+`4376cac Bump up version to 0.3.0` (merge `eef5d45`, tagged **`v0.3.0`**). Since
+0.2.0: the `--dialect` override (ADR-0031 follow-up), native indent engines for
+Fennel/Janet/Hy/LFE (ADR-0043), and the **agent-skill line** — the in-repo
+`skills/lisplens/` skill plus the refactoring primitives it drove out: `docstring`
+(ADR-0044, function-like + Elisp variable, CLI + MCP) and structural
+`insert-after`/`insert-before` on any node. Nothing is in flight.
 
-**0.2.0 shipped** — see the "Released 0.2.0" bullet under **Now** for the summary.
+**0.3.0 shipped** — see the "Released 0.3.0" bullet under **Now** for the summary.
 crates.io + GitHub Release (5-platform binaries) both live and verified. The
-`[Unreleased]` changelog block had drifted empty, so the 0.2.0 section was
-reconstructed from `git log v0.1.1..HEAD` — **going forward, add a CHANGELOG
-`[Unreleased]` entry as each user-facing change lands** so the next release-prep is a
-seal, not a reconstruction.
+published crate now also excludes the developer-facing ADRs (`/docs/adr`) and the
+agent skill (`/skills`) via `Cargo.toml`'s `exclude`. This time `[Unreleased]` had
+again drifted (it was missing `docstring` and the structural insert), so those
+were reconstructed at seal time — the standing reminder holds: **add a CHANGELOG
+`[Unreleased]` entry as each user-facing change lands** so release-prep is a seal,
+not a reconstruction.
 
 **lispexp is fully consumed and sufficient** (assessment recorded in
 `docs/lispexp-feedback/README.md`): feedback 0003–0006 resolved by lispexp 0.7.0;
@@ -375,6 +379,21 @@ free-var **inference**, skeleton auto-discovery for `--also`, multi-*file* extra
   `lisp-indent-defmethod` flat-harness caveat, trailing newlines, or two
   documented gaps). This was the first engine after Emacs Lisp and the template
   for the Scheme engine above.
+- **Released 0.3.0** (2026-07-05) — a **round-out release** on the polyglot base.
+  Two lines. (1) The **agent-skill initiative**: an in-repo `skills/lisplens/`
+  skill (vercel-labs/skills-installable), benchmarked across 7 iterations + a
+  cross-vendor DeepSeek run and brushed up with `waza` — recorded in
+  `docs/notes/20260704-skill-benchmark-agent-edit-procedures.md` and
+  `20260705-lisplens-skill-report.md`. It surfaced that three everyday refactors
+  should be first-class, which drove (2) the primitives: **`docstring`** (ADR-0044;
+  set/replace a docstring for function-like *and* Elisp variable defs; CLI + MCP)
+  and structural **`insert-after`/`insert-before`** on any node (a form can now be
+  inserted inside another by anchor). Also `--dialect` (ADR-0031 follow-up), native
+  indent engines for **Fennel/Janet/Hy/LFE** (ADR-0043 — every recognised Lisp
+  dialect now indents natively; only EDN rides the fallback), and `--help`/`-h` →
+  stdout/exit 0. The published crate now excludes `/docs/adr` and `/skills`. Tag
+  `v0.3.0` (release commit `4376cac`, merge `eef5d45`); crates.io + GitHub Release
+  (5-platform binaries) live and verified. 174 tests, 44 ADRs.
 - **Released 0.2.0** (2026-07-04) — the **polyglot release**. Everything since 0.1.1
   (46 commits, PRs #1–#12): the refactoring commands `check`/`rename`/`inline`/
   `rewrite`/`extract` (ADR-0032–0038) and native indent engines for Common Lisp, the
