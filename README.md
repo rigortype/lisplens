@@ -10,8 +10,7 @@ written atomically. It works across Common Lisp, Scheme, Emacs Lisp, Clojure,
 Racket, Fennel, Janet, Hy, LFE, Phel, and more — the dialect is guessed from the
 file extension (zero-config).
 
-The design is recorded in [`CONTEXT.md`](CONTEXT.md) (domain glossary) and
-[`docs/adr/`](docs/adr/) (architecture decisions).
+The domain vocabulary is in [`CONTEXT.md`](CONTEXT.md).
 
 ## Two modes
 
@@ -151,9 +150,7 @@ queries (`find`, `refs`), a standalone `check`, and the refactoring commands
 (`rename`, `inline`, `rewrite`, `extract`) — all validate-then-write and
 drift-checked. `format` has native indent engines for Emacs Lisp, Common Lisp, the
 Scheme family, Clojure, and Phel (each byte-exact against its oracle), with the
-remaining dialects on the generic Emacs Lisp fallback. See [`docs/adr/`](docs/adr/)
-for what's decided and [`docs/lispexp-integration.md`](docs/lispexp-integration.md)
-for how the backend is used.
+remaining dialects on the generic Emacs Lisp fallback.
 
 ## License
 

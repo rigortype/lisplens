@@ -504,7 +504,7 @@ fn usage() -> ExitCode {
     eprintln!("                   e.g. islisp / common-lisp / clojure) instead of guessing");
     eprintln!("                   from the extension — useful for ambiguous ones like .lsp");
     eprintln!();
-    eprintln!("Skeleton stage — see CONTEXT.md and docs/adr/ for the full design.");
+    eprintln!("Patch DSL, examples, and MCP setup: https://github.com/rigortype/lisplens");
     ExitCode::FAILURE
 }
 
