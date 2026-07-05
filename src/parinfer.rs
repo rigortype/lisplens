@@ -18,7 +18,12 @@
 //!   close-parens are inferred from it over a tolerant `lex()` token scan. When
 //!   the Nameless overlay is enabled, columns are read as they *display*
 //!   (composed prefixes count as their shorter glyph), so indentation is
-//!   interpreted the way a Nameless user sees it (ADR-0030).
+//!   interpreted the way a Nameless user sees it (ADR-0030). A supplied cursor
+//!   locks the paren trail on its line (minimal cursor protection, #31).
+//!
+//! [`run_json`] / [`run_json_line`] run one request given as the shared JSON
+//! shape — used by the MCP tool and the persistent `parinfer --server`
+//! (ADR-0046).
 //!
 //! # Safety model (ADR-0045)
 //!
@@ -81,8 +86,8 @@ pub struct Request<'a> {
     pub config: FormatConfig,
     /// Nameless overlay (Emacs Lisp only), when enabled.
     pub nameless: Option<Nameless>,
-    /// The input cursor, tracked to its post-transform position (position
-    /// tracking only — no cursor-protection rules in this slice).
+    /// The input cursor: tracked to its post-transform position, and in indent
+    /// mode it also locks the paren trail on its line (minimal protection, #31).
     pub cursor: Option<Cursor>,
 }
 
@@ -189,7 +194,26 @@ struct OutLine {
 /// close-parens are re-derived rather than trusted. Indentation itself is never
 /// changed. Unresolvable lexical states (unterminated string/comment,
 /// end-of-line backslash, unmatched close-paren) refuse the input unchanged.
+///
+/// **Cursor protection (#31).** When a cursor is given, the paren trail on the
+/// cursor's line is left untouched (locked, not stripped/re-inferred) so live
+/// editing doesn't collapse the trail out from under the caret. If protecting it
+/// would prevent a balanced result, the protection **yields**: the transform is
+/// retried without it (ADR-0045 balance guarantee wins).
 fn run_indent(req: &Request) -> Answer {
+    if let Some(cursor) = req.cursor {
+        let protected = run_indent_inner(req, Some(cursor.line));
+        if protected.success {
+            return protected;
+        }
+    }
+    run_indent_inner(req, None)
+}
+
+/// The indent-mode core. `protect` names a line whose movable trailing
+/// close-parens must be kept verbatim (locked) rather than stripped — the cursor
+/// line under protection (#31); `None` processes every line normally.
+fn run_indent_inner(req: &Request, protect: Option<usize>) -> Answer {
     let source = req.text;
     if source.trim().is_empty() {
         return Answer {
@@ -273,16 +297,20 @@ fn run_indent(req: &Request) -> Answer {
         let code_region_end = comment_start[l].unwrap_or(le);
 
         // Strip the movable trailing close-parens (and the whitespace between
-        // them): the run of `Close` tokens at the end of the code region.
+        // them): the run of `Close` tokens at the end of the code region. The
+        // protected (cursor) line keeps its trail verbatim (#31) — its closers
+        // stay and are scanned as locked, so live editing can't collapse them.
         let mut strip_from = code_region_end;
-        for d in delims[l].iter().rev() {
-            if d.start >= strip_from {
-                continue;
-            }
-            if !d.open && source[d.end..strip_from].trim().is_empty() {
-                strip_from = d.start;
-            } else {
-                break;
+        if protect != Some(l) {
+            for d in delims[l].iter().rev() {
+                if d.start >= strip_from {
+                    continue;
+                }
+                if !d.open && source[d.end..strip_from].trim().is_empty() {
+                    strip_from = d.start;
+                } else {
+                    break;
+                }
             }
         }
 
@@ -655,6 +683,90 @@ pub fn answer_to_json(answer: &Answer) -> serde_json::Value {
     })
 }
 
+/// An answer-shaped JSON value for a request that could not even be run (bad
+/// mode, unknown dialect, malformed JSON): `success = false`, the given text
+/// echoed unchanged, and a positioned-at-origin error. Keeps every request →
+/// exactly-one-answer, so a persistent server never desynchronizes.
+fn error_answer(text: &str, name: &str, message: &str) -> serde_json::Value {
+    serde_json::json!({
+        "text": text,
+        "success": false,
+        "error": { "name": name, "message": message, "line": 0, "x": 0 },
+        "cursorX": serde_json::Value::Null,
+        "cursorLine": serde_json::Value::Null,
+    })
+}
+
+/// Run one request given as a JSON object `{mode, text, dialect?, nameless?,
+/// name?, cursorLine?, cursorX?}` (the MCP `parinfer` tool's shape and the
+/// server's line protocol), returning the answer as a JSON value. Invalid input
+/// yields an `error_answer` rather than panicking, so callers can always emit
+/// exactly one answer per request.
+#[must_use]
+pub fn run_json(request: &serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+    let text = request.get("text").and_then(Value::as_str).unwrap_or("");
+    let Some(mode) = request
+        .get("mode")
+        .and_then(Value::as_str)
+        .and_then(Mode::from_name)
+    else {
+        return error_answer(
+            text,
+            "bad-request",
+            "missing or unknown `mode` (paren|indent)",
+        );
+    };
+    let dialect = match request.get("dialect").and_then(Value::as_str) {
+        Some(d) => match d.parse::<Dialect>() {
+            Ok(d) => d,
+            Err(_) => return error_answer(text, "bad-request", &format!("unknown dialect `{d}`")),
+        },
+        None => Dialect::EmacsLisp,
+    };
+    let nameless_on = request
+        .get("nameless")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let name_hint = request.get("name").and_then(Value::as_str);
+    let cursor = match (
+        request.get("cursorLine").and_then(Value::as_u64),
+        request.get("cursorX").and_then(Value::as_u64),
+    ) {
+        (Some(line), Some(x)) => Some(Cursor {
+            line: line as usize,
+            x: x as usize,
+        }),
+        _ => None,
+    };
+    let mut config = FormatConfig::default();
+    config.nameless |= nameless_on;
+    let nameless = if config.nameless && dialect == Dialect::EmacsLisp {
+        Some(Nameless::for_file(name_hint.unwrap_or("")))
+    } else {
+        None
+    };
+    answer_to_json(&run(&Request {
+        mode,
+        text,
+        dialect,
+        config,
+        nameless,
+        cursor,
+    }))
+}
+
+/// Parse one line of the server protocol (a JSON request object) and run it,
+/// always returning exactly one answer-shaped JSON value — a malformed line
+/// becomes an `error_answer` so the server stays in lock-step.
+#[must_use]
+pub fn run_json_line(line: &str) -> serde_json::Value {
+    match serde_json::from_str::<serde_json::Value>(line) {
+        Ok(request) => run_json(&request),
+        Err(e) => error_answer("", "bad-json", &format!("malformed request JSON: {e}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -907,5 +1019,73 @@ mod tests {
         let src = "(php-foo (bar\n       baz";
         let a = indent(src, Dialect::EmacsLisp);
         assert_eq!(a.text, "(php-foo (bar)\n       baz)");
+    }
+
+    // --- cursor-line trail protection (#31) ---
+
+    #[test]
+    fn indent_cursor_protects_the_trail_on_its_line() {
+        // Without a cursor, bar's close-paren is stripped and the deep `baz` is
+        // pulled inside bar. With the cursor on bar's line (its paren trail), that
+        // closer is locked — `baz` is not yanked in, the trail stays put.
+        let src = "(foo (bar)\n          baz";
+        let plain = indent(src, Dialect::EmacsLisp);
+        assert_eq!(plain.text, "(foo (bar\n          baz))");
+
+        let mut r = req(Mode::Indent, src, Dialect::EmacsLisp);
+        r.cursor = Some(Cursor { line: 0, x: 10 });
+        let protected = run(&r);
+        assert!(protected.success);
+        assert_eq!(protected.text, "(foo (bar)\n          baz)");
+        assert_balanced(&protected.text, Dialect::EmacsLisp);
+    }
+
+    #[test]
+    fn indent_protection_yields_to_preserve_balance() {
+        // Protecting the cursor line's trail would keep an extra `)` and unbalance
+        // the result, so protection yields and the transform trims it (ADR-0045).
+        let mut r = req(Mode::Indent, "(a))\n", Dialect::EmacsLisp);
+        r.cursor = Some(Cursor { line: 0, x: 3 });
+        let a = run(&r);
+        assert!(a.success);
+        assert_eq!(a.text, "(a)\n");
+    }
+
+    // --- server / JSON request shape (#30) ---
+
+    #[test]
+    fn run_json_runs_both_modes() {
+        let paren = run_json(&serde_json::json!({ "mode": "paren", "text": "(a\n(b))\n" }));
+        assert_eq!(paren["success"], serde_json::json!(true));
+        let indent = run_json(&serde_json::json!({ "mode": "indent", "text": "(a\n  (b" }));
+        assert_eq!(indent["success"], serde_json::json!(true));
+        assert_eq!(indent["text"], serde_json::json!("(a\n  (b))"));
+    }
+
+    #[test]
+    fn run_json_bad_request_echoes_text_unchanged() {
+        // Missing mode → success:false, input echoed, so a server stays in lock-step.
+        let a = run_json(&serde_json::json!({ "text": "(a)" }));
+        assert_eq!(a["success"], serde_json::json!(false));
+        assert_eq!(a["text"], serde_json::json!("(a)"));
+        assert_eq!(a["error"]["name"], serde_json::json!("bad-request"));
+    }
+
+    #[test]
+    fn run_json_line_handles_malformed_json() {
+        let a = run_json_line("not json");
+        assert_eq!(a["success"], serde_json::json!(false));
+        assert_eq!(a["error"]["name"], serde_json::json!("bad-json"));
+    }
+
+    #[test]
+    fn run_json_carries_cursor_and_dialect() {
+        let a = run_json(&serde_json::json!({
+            "mode": "indent", "dialect": "clojure",
+            "text": "(defn f [x]\n  {:a 1", "cursorLine": 1, "cursorX": 6
+        }));
+        assert_eq!(a["success"], serde_json::json!(true));
+        assert_eq!(a["text"], serde_json::json!("(defn f [x]\n  {:a 1})"));
+        assert_eq!(a["cursorLine"], serde_json::json!(1));
     }
 }

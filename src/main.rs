@@ -286,6 +286,12 @@ fn run_parinfer(args: &[&str]) -> ExitCode {
         norm.push(a);
     }
 
+    // `--server`: a persistent line-delimited JSON server (each request carries its
+    // own mode/dialect/cursor), for an editor that keeps one warm process (#30).
+    if norm.contains(&"--server") {
+        return run_parinfer_server();
+    }
+
     let mut mode_name: Option<&str> = None;
     let mut json = false;
     let mut nameless = false;
@@ -397,6 +403,29 @@ fn run_parinfer(args: &[&str]) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// `lisplens parinfer --server` (ADR-0046): a persistent line-delimited JSON
+/// server. Reads one JSON request object per line from stdin and writes exactly
+/// one JSON answer per line to stdout, staying alive until EOF. Stateless — each
+/// request carries its own `{mode, text, dialect?, nameless?, name?, cursorLine?,
+/// cursorX?}`, so one process serves every editor buffer. A malformed line yields
+/// an error answer rather than desynchronizing the stream.
+fn run_parinfer_server() -> ExitCode {
+    use std::io::{BufRead, Write};
+    let stdin = std::io::stdin();
+    let mut stdout = std::io::stdout();
+    for line in stdin.lock().lines() {
+        let Ok(line) = line else { break };
+        if line.trim().is_empty() {
+            continue;
+        }
+        let answer = lisplens::parinfer::run_json_line(&line);
+        if writeln!(stdout, "{answer}").is_err() || stdout.flush().is_err() {
+            break;
+        }
+    }
+    ExitCode::SUCCESS
 }
 
 fn run_check(path: PathBuf) -> ExitCode {
@@ -662,6 +691,7 @@ usage:
   lisplens refs <name> [dir]    find symbol occurrences (code/data tagged)
   lisplens format [--nameless] [--tonsky] <file>  reindent a Lisp file (native, by dialect; --tonsky = Clojure fixed style)
   lisplens parinfer <paren|indent> [--json] [--nameless] [--name N|--file P] [--cursor-line N --cursor-x M]  parinfer-style transform of stdin->stdout (ADR-0045)
+  lisplens parinfer --server    persistent line-delimited JSON parinfer server for editors (ADR-0046)
   lisplens check <file>         parse-check a Lisp file (diagnostics; non-zero on errors)
   lisplens rename <old> <new> <file>   rename a symbol across a file (symbol-exact, safe)
   lisplens inline <name> <file>        inline a function at its call sites (safe subset)
