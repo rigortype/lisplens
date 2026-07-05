@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **`parinfer` — a native parinfer-style transform** (ADR-0045). `lisplens parinfer <mode>` reads a buffer on stdin and writes the transformed text to stdout (`--json` for a structured `{text, success, error, cursorX, cursorLine}` result); the MCP `parinfer` tool takes `{mode, text, …}` and returns that result. It is not an integration with `parinfer-rust`/`parinfer-rust-emacs` and keeps no API compatibility with `parinfer.js` — lisplens becomes its own alternative, built on the faithful Emacs indenter and the Nameless model. This first slice ships **paren mode**: balanced input is reindented faithfully (Nameless-aware when enabled with `--nameless`/`--name`), and unbalanced input is returned unchanged with a positioned diagnostic — a balance-*generating* safety model that never emits broken output. `--dialect` selects the language (default Emacs Lisp); an optional cursor (`--cursor-line`/`--cursor-x`) is tracked to its post-transform position. Indent mode and Nameless-aware column interpretation are the follow-ups.
+
 ## [0.3.0] - 2026-07-05
 
 A round-out release. It completes the common structural edits with a `docstring` primitive and gives Structural patches `insert-after`/`insert-before` that work on any node — so you can now add a form *inside* another by anchor. It also adds a `--dialect` override for ambiguous extensions and native indent engines for the last four recognised Lisp dialects (Fennel, Janet, Hy, LFE), leaving only EDN data on the generic fallback.
