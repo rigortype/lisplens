@@ -43,6 +43,31 @@ Text tools don't understand Lisp, and on real code that bites:
 - **Context size.** On a large file, `struct read` gives a compact outline; you
   fetch only the form you touch instead of reading thousands of lines.
 
+## Refactoring primitives — reach for these first
+
+Common refactors have a one-shot command that resolves every site structurally,
+applies them through the safety pipeline, and prints a post-condition summary —
+so you skip the `refs` → `line edit` batch → `refs` re-verify assembly:
+
+- `lisplens rename <old> <new> <file>` — symbol-exact rename across the file.
+  Never touches siblings (`foo-bar` when you meant `foo`) or comment/string
+  mentions; prints `renamed N occurrence(s)` + the new hash. The safe one-shot
+  answer to `sed`/`perl -i`.
+- `lisplens inline <name> <file>` — replace each call of a function/`defsubst`
+  in this file with its body, `let`-binding args to keep single-evaluation and
+  order. The definition must be in the same file; unsafe bodies are refused, not
+  corrupted.
+- `lisplens rewrite <file>` — structural pattern→template rewrite (spec on
+  stdin): exact s-expr matching, parse-safe, but *not* behaviour-preserving (a
+  "structural sed" — you assert the semantics).
+- `lisplens extract <file> <anchor> <name> [param…]` — pull a form into a new
+  named function.
+- `lisplens check <file>` — parse/validate; non-zero exit on errors. Use it
+  instead of shelling out to `emacs --batch check-parens`.
+
+Drop to the loop below for edits these don't cover — adding a docstring, a
+one-off form change, or a cross-file inline (the def in another file).
+
 ## The loop: read shape → anchor → edit → confirm
 
 **1. Read the shape.**
@@ -108,11 +133,9 @@ PATCH
 ```
 → `ok <new-hash>`, reindented and re-validated.
 
-**Renaming across a whole file** (a symbol used in several top-level forms):
-`struct edit`'s `rename` verb is subtree-scoped, so instead enumerate the exact
-sites with `lisplens refs <name>` and apply a `line edit` (or per-form `rename`)
-at each — you rename only real occurrences, never the siblings a blind `sed`
-would clobber.
+**Renaming?** Use the `lisplens rename` primitive above — one call, symbol-exact,
+whole file. (The `struct edit` `rename` verb is only for renaming within a single
+anchored form, e.g. a local inside one defun.)
 
 ## Guardrails / troubleshooting
 

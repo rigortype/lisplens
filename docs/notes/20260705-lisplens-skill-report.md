@@ -97,6 +97,40 @@ Both surfaced when agents drove the tool in iteration-5.
    target a top-level/sibling form; to change something *inside* a form,
    `replace` the enclosing form. (The proper fix is primitive #2/#3 above.)
 
+## Update — primitives surfaced to agents + step-count re-benchmark
+
+Acting on recommendation #1: rebuilt the current source (which already carries
+`rename`/`inline`/`rewrite`/`extract`/`check` per ADR-0032) and installed it over
+`~/local/bin/lisplens` (old 7-command build backed up as `lisplens.bak-7cmd`).
+Then updated the skill to teach the primitives ("reach for these first"), keeping
+the read→anchor→edit loop as the fallback. Smoke-tested each:
+
+- **`rename`** — `lisplens rename c-macro-cache c-cpp-macro-cache <file>` →
+  `renamed 26 occurrence(s)`, siblings 14/12/10 untouched, 0 corruption, parses.
+  One command for what was a `refs → line edit batch → refs` idiom.
+- **`inline`** — hygienic: substitutes via `let`-bindings (`(let ((x a)) …)`) to
+  preserve single-evaluation/order, and **requires the definition in the target
+  file** (cross-file inline — iteration 4's def-in-`php.el`, calls-in-`php-mode.el`
+  — is refused with "no definition found", the ADR-0032 cross-file-scope gap). So
+  the skill flags cross-file inline as a loop-fallback case.
+- **`check`** — parse/validate, exit 0/non-zero; replaces shelling out to Emacs.
+
+**Re-benchmark (ADR-0032 #113)** — the symbol-rename trap, new skill (teaches
+`rename`) vs the prior hand-assembled idiom:
+
+| | iter-5 (manual idiom) | iter-6 (`rename` primitive) |
+| --- | --- | --- |
+| edit procedure | `refs` → `line read` → 26-op `line edit` → `refs` | **one `lisplens rename` call** |
+| tool calls | 11 | 6 (the rest are optional verification the post-condition summary already gives) |
+| wall time | 93.8s | 40.2s |
+| tokens | 36.6k | 34.5k |
+| correctness | 26/0, siblings 14·12·10, parses | identical |
+
+The multi-step idiom collapsed to a single self-verifying command, at correctness
+parity — the ergonomic win ADR-0032 predicted, now measured. The skill will need
+one more pass once the primitive-equipped binary is the *published* release (the
+crates.io/installed default), so downstream users get the same surface.
+
 ## Caveats
 
 - Iteration-5 is 1 run per (eval, config) — a regression *smoke test*, not new
