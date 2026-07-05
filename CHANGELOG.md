@@ -6,10 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-05
+
+A round-out release. It completes the common structural edits with a `docstring` primitive and gives Structural patches `insert-after`/`insert-before` that work on any node — so you can now add a form *inside* another by anchor. It also adds a `--dialect` override for ambiguous extensions and native indent engines for the last four recognised Lisp dialects (Fennel, Janet, Hy, LFE), leaving only EDN data on the generic fallback.
+
 ### Added
 
+- **`docstring` — set or replace a definition's docstring.** `lisplens docstring <name> <file>` (MCP `docstring`) reads the text from stdin and escapes it into a string literal, so the caller never hand-quotes or risks unbalancing the parens. Covers function-like definitions (`defun`/`defsubst`/`defmacro`/`cl-*`, Scheme `(define (name …) …)`) — the docstring goes right after the argument list — and Elisp variable definitions (`defvar`/`defconst`/`defcustom`/…), where it goes after the value; a valueless `(defvar x)` or a Scheme value definition is refused with a reason rather than guessed (ADR-0044).
+- **Structural `insert-after` / `insert-before`.** These shared verbs now work in a Structural patch, not just a Line-hash one, and the anchor may be an *inner* node — a defun's argument list, a body form — so the payload is inserted as a new sibling inside the enclosing form (previously anchoring an insert inside a form was rejected). The touched top-level form is reindented and the result is parse-checked before the write.
 - `--dialect NAME` — force the dialect for a single-file command (kebab-case, e.g. `--dialect islisp`) instead of guessing from the file extension, so an ambiguous extension like `.lsp` (Common Lisp / AutoLISP / ISLisp) can be read as the one you mean. Project-wide `find`/`refs` keep their per-file guess.
-- **Native indent engines for Fennel, Janet, Hy, and LFE** (ADR-0043). `format` now indents `.fnl`/`.janet`/`.hy`/`.lfe` natively instead of through the generic Emacs Lisp fallback: a special form body-indents its children at `open + 2` and every other call aligns under its first argument. Fennel and Janet take their special-form tables from their own formatters (`fnlfmt`, `spork/fmt`); Hy and LFE — which have no canonical formatter — take an induced table recovered from their corpora. On each dialect's own sources this lifts code-line indentation match from ~16–50% (fallback) to 67–92% (Fennel 91.7%, Janet 81.3%, LFE 74.4%, Hy 67.3%). Every dialect lisplens recognises by extension now has a native engine.
+- **Native indent engines for Fennel, Janet, Hy, and LFE** (ADR-0043). `format` now indents `.fnl`/`.janet`/`.hy`/`.lfe` natively instead of through the generic Emacs Lisp fallback: a special form body-indents its children at `open + 2` and every other call aligns under its first argument. Fennel and Janet take their special-form tables from their own formatters (`fnlfmt`, `spork/fmt`); Hy and LFE — which have no canonical formatter — take an induced table recovered from their corpora. On each dialect's own sources this lifts code-line indentation match from ~16–50% (fallback) to 67–92% (Fennel 91.7%, Janet 81.3%, LFE 74.4%, Hy 67.3%). Every Lisp dialect lisplens recognises by extension now has a native engine (EDN data rides the fallback).
+
+### Changed
+
+- `lisplens --help` / `-h` / `help` now print the usage to stdout and exit 0; a bare or unrecognised invocation still prints to stderr and exits non-zero. Previously the only usage path exited non-zero, so an install check like `lisplens --help` looked like a failure.
 
 ## [0.2.0] - 2026-07-04
 
@@ -55,7 +65,8 @@ First release. lisplens is a CLI and MCP tool that lets an AI agent read a Lisp 
 - **MCP server** — `lisplens mcp` exposes the same operations over stdio for MCP clients.
 - Polyglot coverage: Common Lisp, Scheme, Emacs Lisp, Clojure, Racket, Fennel, Janet, Hy, LFE, Phel, and more.
 
-[Unreleased]: https://github.com/rigortype/lisplens/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/rigortype/lisplens/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/rigortype/lisplens/releases/tag/v0.3.0
 [0.2.0]: https://github.com/rigortype/lisplens/releases/tag/v0.2.0
 [0.1.1]: https://github.com/rigortype/lisplens/releases/tag/v0.1.1
 [0.1.0]: https://github.com/rigortype/lisplens/releases/tag/v0.1.0

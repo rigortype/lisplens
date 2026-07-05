@@ -46,6 +46,7 @@ lisplens refs <name> [dir]           find symbol occurrences (code/data tagged)
 lisplens check  <file>               parse-check; diagnostics, non-zero on errors
 lisplens rename <old> <new> <file>   rename a symbol file-wide (symbol-exact, safe)
 lisplens inline <name> <file>        inline a function at its call sites (safe subset)
+lisplens docstring <name> <file>     set/replace a definition's docstring (text on stdin)
 lisplens rewrite <file>              structural pattern->template rewrite (spec on stdin)
 lisplens extract <file> <anchor> <name> [param...]
                                      pull a form (or a run of forms) into a new function
@@ -81,10 +82,12 @@ $ printf '@ %s\nreplace 40:b7e1 <<END\n(defmethod area ((s circle)) (round (* pi
 ok 9f3c1a2b4d5e6f70    # the new file-hash
 ```
 
-Structural ops: `replace`, `delete`, `wrap`, `raise`, `splice`, `slurp-fwd`,
-`slurp-back`, `barf-fwd`, `barf-back`, `split @<index>`, `join <anchor2>`,
-`rename <from> <to>`, `format` (reindent the anchored form in place). Line-hash
-ops: `replace`, `delete`, `insert-after`, `insert-before`.
+Shared ops (both modes): `replace`, `delete`, `insert-after`, `insert-before` —
+in a Structural patch the anchor may be an *inner* node, so the payload becomes a
+new sibling inside the enclosing form. Structural-only: `wrap`, `raise`,
+`splice`, `slurp-fwd`, `slurp-back`, `barf-fwd`, `barf-back`, `split @<index>`,
+`join <anchor2>`, `rename <from> <to>`, `format` (reindent the anchored form in
+place).
 
 lisplens owns whitespace: a `replace` keeps a line's terminator; an `insert`
 gets one. Agents supply content, not spacing.
@@ -99,6 +102,9 @@ touched, and refuses any edit that would break the parse:
   survive when you rename `foo`.
 - `inline <name>` — expand a function at its call sites, over the provably safe
   subset (non-recursive, required-params); anything unsafe is refused with a reason.
+- `docstring <name>` — set or replace a definition's docstring (text on stdin,
+  escaped for you); function-like defs (after the arglist) and Elisp variable defs
+  (after the value).
 - `rewrite` — a structural pattern→template "sed" (metavariables, classes,
   non-linear repeats), read as a spec on stdin. See [`docs/rewrite.md`](docs/rewrite.md).
 - `extract <anchor> <name>` — pull a form into a new function and replace it with a
@@ -111,23 +117,31 @@ touched, and refuses any edit that would break the parse:
 
 The dialect is guessed from the file extension — zero config. **Reading, editing,
 `find`/`refs`, `check`, and the refactoring commands work on every supported
-dialect**, since lispexp parses each natively. Indentation (`format`) has two tiers.
+dialect**, since lispexp parses each natively. Indentation (`format`) has a native
+engine for every Lisp dialect lisplens recognises; only EDN data rides a fallback.
 
-**Native indent engines** — a faithful port of that language's own formatter,
-validated byte-exact against it, and auto-applied to the touched region on a
-Structural edit:
+**Native indent engines** — auto-applied to the touched region on a Structural
+edit. The first group is a faithful port of that language's own formatter,
+validated byte-exact against it; Fennel/Janet/Hy/LFE reuse the same body-indent
+engine with a per-dialect special-form table (Fennel/Janet from their own
+formatters, Hy/LFE induced from their corpora), matching their own sources
+~67–92% rather than byte-exact:
 
-| Dialect | Extensions | Indent oracle |
+| Dialect | Extensions | Indent model |
 | --- | --- | --- |
-| Emacs Lisp | `.el` | Emacs `lisp-indent-function` |
-| Common Lisp | `.lisp` `.lsp` `.cl` `.asd` | Emacs `common-lisp-indent-function` |
-| Scheme family | `.scm` `.ss` `.sls` `.sps` `.sld`, Racket `.rkt` | Emacs `scheme-indent-function` |
-| Clojure | `.clj` `.cljs` `.cljc` | `cljfmt` (semantic, or `--tonsky` fixed style) |
-| Phel | `.phel` | `phel format` |
+| Emacs Lisp | `.el` | Emacs `lisp-indent-function` (byte-exact) |
+| Common Lisp | `.lisp` `.lsp` `.cl` `.asd` | Emacs `common-lisp-indent-function` (byte-exact) |
+| Scheme family | `.scm` `.ss` `.sls` `.sps` `.sld`, Racket `.rkt` | Emacs `scheme-indent-function` (byte-exact) |
+| Clojure | `.clj` `.cljs` `.cljc` | `cljfmt` (byte-exact; or `--tonsky` fixed style) |
+| Phel | `.phel` | `phel format` (byte-exact) |
+| Fennel | `.fnl` | `fnlfmt` special-form table (body `+2`) |
+| Janet | `.janet` | `spork/fmt` special-form table (body `+2`) |
+| Hy | `.hy` | corpus-induced table (body `+2`) |
+| LFE | `.lfe` | corpus-induced table (body `+2`) |
 
-**Fallback** — Fennel (`.fnl`), Janet (`.janet`), Hy (`.hy`), LFE (`.lfe`), and EDN
-(`.edn`) have no Emacs indenter to port, so they ride the generic Emacs Lisp engine
-on an explicit `format` (and are not auto-formatted on edit).
+**Fallback** — EDN (`.edn`) is data with no dedicated indenter, so it rides the
+generic Emacs Lisp engine on an explicit `format` (and is not auto-formatted on
+edit).
 
 ### Formatting config
 
@@ -145,12 +159,14 @@ and its project:
 
 ## Status
 
-Stable CLI and MCP server: both addressing modes (read, expand, edit), project
-queries (`find`, `refs`), a standalone `check`, and the refactoring commands
-(`rename`, `inline`, `rewrite`, `extract`) — all validate-then-write and
+Stable CLI and MCP server: both addressing modes (read, expand, edit — including
+structural `insert-after`/`insert-before` inside a form), project queries
+(`find`, `refs`), a standalone `check`, and the refactoring commands (`rename`,
+`inline`, `docstring`, `rewrite`, `extract`) — all validate-then-write and
 drift-checked. `format` has native indent engines for Emacs Lisp, Common Lisp, the
-Scheme family, Clojure, and Phel (each byte-exact against its oracle), with the
-remaining dialects on the generic Emacs Lisp fallback.
+Scheme family, Clojure, and Phel (each byte-exact against its oracle) plus
+Fennel, Janet, Hy, and LFE (body-indent tables, ~67–92% match); only EDN data
+rides the generic Emacs Lisp fallback.
 
 ## License
 
