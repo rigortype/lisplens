@@ -57,9 +57,11 @@ so you skip the `refs` → `line edit` batch → `refs` re-verify assembly:
   in this file with its body, `let`-binding args to keep single-evaluation and
   order. The definition must be in the same file; unsafe bodies are refused, not
   corrupted.
-- `lisplens docstring <name> <file>` — set (or replace) a function-like
-  definition's docstring; the text is read from stdin (raw — lisplens escapes and
-  quotes it). Covers defun/defsubst/defmacro/cl-* and Scheme `(define (name …))`.
+- `lisplens docstring <name> <file>` — set (or replace) a definition's docstring;
+  text is read from stdin (raw — lisplens escapes and quotes it). Covers
+  function-like defs (defun/defsubst/defmacro/cl-*, Scheme `(define (name …))`)
+  and Elisp variable defs (defvar/defconst/defcustom/…, docstring after the
+  value).
 - `lisplens rewrite <file>` — structural pattern→template rewrite (spec on
   stdin): exact s-expr matching, parse-safe, but *not* behaviour-preserving (a
   "structural sed" — you assert the semantics).
@@ -68,9 +70,8 @@ so you skip the `refs` → `line edit` batch → `refs` re-verify assembly:
 - `lisplens check <file>` — parse/validate; non-zero exit on errors. Use it
   instead of shelling out to `emacs --batch check-parens`.
 
-Drop to the loop below for edits these don't cover — a one-off form change, a
-variable's docstring (v1 covers function-like defs), or a cross-file inline (the
-def in another file).
+Drop to the loop below for edits these don't cover — a one-off form change or a
+cross-file inline (the def in another file).
 
 ## The loop: read shape → anchor → edit → confirm
 

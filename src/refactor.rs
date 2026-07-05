@@ -496,12 +496,16 @@ pub struct DocstringOutcome {
 /// Why setting a docstring was refused. No partial write ever happens on error.
 #[derive(Debug)]
 pub enum DocstringError {
-    /// No function-like definition of `name` was found.
+    /// No definition of `name` (function-like or variable) was found.
     NotFound(String),
-    /// `name` is defined by more than one function-like form.
+    /// `name` is defined by more than one form.
     Ambiguous(String),
-    /// `name` is defined only as a variable/value; v1 covers function-like defs.
-    NotAFunction(String),
+    /// `name` is a variable declared without a value (`(defvar x)`), so there is
+    /// no slot to attach a docstring after.
+    NoValue(String),
+    /// `name` is defined by a form with no docstring slot (e.g. a Scheme
+    /// `(define name value)`).
+    NoDocstringSlot(String),
     /// The docstring text was empty.
     EmptyText,
     Splice(SpliceError),
@@ -512,12 +516,15 @@ pub enum DocstringError {
 impl std::fmt::Display for DocstringError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            DocstringError::NotFound(s) => write!(f, "no function-like definition of `{s}`"),
+            DocstringError::NotFound(s) => write!(f, "no definition of `{s}`"),
             DocstringError::Ambiguous(s) => write!(f, "`{s}` is defined more than once"),
-            DocstringError::NotAFunction(s) => write!(
+            DocstringError::NoValue(s) => write!(
                 f,
-                "`{s}` is a variable/value; docstring v1 covers function-like definitions"
+                "`{s}` is declared without a value, so it has no docstring slot"
             ),
+            DocstringError::NoDocstringSlot(s) => {
+                write!(f, "`{s}` is a definition with no docstring slot")
+            }
             DocstringError::EmptyText => write!(f, "docstring text is empty"),
             DocstringError::Splice(e) => write!(f, "splice failed: {e:?}"),
             DocstringError::Write(e) => write!(f, "{e:?}"),
@@ -542,18 +549,27 @@ fn string_literal(text: &str) -> String {
     s
 }
 
-/// The docstring slot of a function-like definition of `name`: the byte offset
-/// just after the argument list (the insertion point), and the datum currently
-/// occupying the docstring position if one is present.
+/// The docstring slot of a definition of `name`: the byte offset to insert at
+/// (just after the argument list for a function, or after the value for a
+/// variable), and the datum currently in the docstring position if one is there.
 struct DocSlot<'a> {
-    after_arglist: usize,
+    insert_at: usize,
     existing: Option<&'a Datum<'a>>,
 }
 
-/// Locate the docstring slot of a function-like definition of `name` in `form`.
-/// `Some(Ok(slot))` — a function-like def of `name`; `Some(Err(()))` — it defines
-/// `name` but as a variable/value (unsupported in v1); `None` — unrelated form.
-fn doc_slot<'a>(form: &'a Datum<'a>, name: &str) -> Option<Result<DocSlot<'a>, ()>> {
+/// Why a form that defines `name` still can't take a docstring.
+enum DocReject {
+    /// A variable declared with no value (`(defvar x)`) — no slot after a value.
+    NoValue,
+    /// A definition with no docstring convention (e.g. `(define name value)`).
+    NoSlot,
+}
+
+/// Locate the docstring slot of a definition of `name` in `form`.
+/// `Some(Ok(slot))` — a def of `name` that takes a docstring (function-like, or a
+/// variable with a value); `Some(Err(reason))` — it defines `name` but can't take
+/// one; `None` — unrelated form.
+fn doc_slot<'a>(form: &'a Datum<'a>, name: &str) -> Option<Result<DocSlot<'a>, DocReject>> {
     const FN_DEFS: &[&str] = &[
         "defun",
         "defsubst",
@@ -581,11 +597,9 @@ fn doc_slot<'a>(form: &'a Datum<'a>, name: &str) -> Option<Result<DocSlot<'a>, (
         }
         // `(head name ARGLIST slot rest…)`
         let arglist = items.get(2)?;
-        let after_arglist = arglist.span.end as usize;
-        let existing = docstring_at(items, 3);
         return Some(Ok(DocSlot {
-            after_arglist,
-            existing,
+            insert_at: arglist.span.end as usize,
+            existing: fn_docstring_at(items, 3),
         }));
     }
     if head == "define" || head == "define*" {
@@ -595,37 +609,48 @@ fn doc_slot<'a>(form: &'a Datum<'a>, name: &str) -> Option<Result<DocSlot<'a>, (
                 if sig.first().and_then(as_sym) != Some(name) {
                     return None;
                 }
-                let sig_node = &items[1];
-                let after_arglist = sig_node.span.end as usize;
-                let existing = docstring_at(items, 2);
                 Some(Ok(DocSlot {
-                    after_arglist,
-                    existing,
+                    insert_at: items[1].span.end as usize,
+                    existing: fn_docstring_at(items, 2),
                 }))
             }
-            DatumKind::Symbol(s) if *s == name => Some(Err(())),
+            // `(define name value)` — no docstring convention.
+            DatumKind::Symbol(s) if *s == name => Some(Err(DocReject::NoSlot)),
             _ => None,
         };
     }
     if VAR_DEFS.contains(&head) {
-        return (as_sym(items.get(1)?) == Some(name)).then_some(Err(()));
+        if as_sym(items.get(1)?) != Some(name) {
+            return None;
+        }
+        // `(head name VALUE docstring? …)` — the docstring follows the value.
+        let Some(value) = items.get(2) else {
+            return Some(Err(DocReject::NoValue));
+        };
+        let existing = items.get(3).filter(|d| matches!(d.kind, DatumKind::Str(_)));
+        return Some(Ok(DocSlot {
+            insert_at: value.span.end as usize,
+            existing,
+        }));
     }
     None
 }
 
-/// The existing docstring at body index `idx` in `items`: a string is a docstring
-/// only when it is *not* the sole body form (mirrors `finish_body`, ADR-0032) —
-/// a lone string body is a return value, so a docstring is inserted before it.
-fn docstring_at<'a>(items: &'a [Datum<'a>], idx: usize) -> Option<&'a Datum<'a>> {
+/// The existing docstring at body index `idx` of a *function-like* def: a string
+/// is a docstring only when it is *not* the sole body form (mirrors `finish_body`,
+/// ADR-0032) — a lone string body is a return value, so a docstring is inserted
+/// before it rather than replacing it.
+fn fn_docstring_at<'a>(items: &'a [Datum<'a>], idx: usize) -> Option<&'a Datum<'a>> {
     let cand = items.get(idx)?;
     let is_last = idx + 1 >= items.len();
     (matches!(cand.kind, DatumKind::Str(_)) && !is_last).then_some(cand)
 }
 
-/// Set (or replace) the docstring of the function-like definition of `name` in
-/// `path`, from raw `text` (ADR-0044). Escapes `text` into a string literal,
-/// inserts it after the argument list (or replaces the existing docstring), then
-/// runs the standard pipeline: splice → native reindent → validate-then-write.
+/// Set (or replace) the docstring of the definition of `name` in `path`, from raw
+/// `text` (ADR-0044). Covers function-like defs (docstring after the arglist) and
+/// Elisp variable defs (docstring after the value). Escapes `text` into a string
+/// literal, inserts it (or replaces the existing docstring), then runs the
+/// standard pipeline: splice → native reindent → validate-then-write.
 pub fn set_docstring_in_file(
     path: &Path,
     name: &str,
@@ -641,18 +666,21 @@ pub fn set_docstring_in_file(
     let parsed = parse(&source, &options);
 
     let mut slots = Vec::new();
-    let mut saw_variable = false;
+    let mut reject = None;
     for datum in &parsed.data {
         match doc_slot(datum, name) {
             Some(Ok(slot)) => slots.push(slot),
-            Some(Err(())) => saw_variable = true,
+            Some(Err(r)) => reject = Some(r),
             None => {}
         }
     }
-    let slot = match slots.len() {
-        1 => slots.pop().unwrap(),
-        0 if saw_variable => return Err(DocstringError::NotAFunction(name.to_string())),
-        0 => return Err(DocstringError::NotFound(name.to_string())),
+    let slot = match (slots.len(), reject) {
+        (1, _) => slots.pop().unwrap(),
+        (0, Some(DocReject::NoValue)) => return Err(DocstringError::NoValue(name.to_string())),
+        (0, Some(DocReject::NoSlot)) => {
+            return Err(DocstringError::NoDocstringSlot(name.to_string()))
+        }
+        (0, None) => return Err(DocstringError::NotFound(name.to_string())),
         _ => return Err(DocstringError::Ambiguous(name.to_string())),
     };
 
@@ -667,7 +695,7 @@ pub fn set_docstring_in_file(
         ),
         None => (
             Edit {
-                range: slot.after_arglist..slot.after_arglist,
+                range: slot.insert_at..slot.insert_at,
                 text: format!("\n  {literal}"),
             },
             DocstringAction::Inserted,
@@ -2882,13 +2910,9 @@ mod tests {
     }
 
     #[test]
-    fn docstring_refuses_variable_missing_and_empty() {
-        let src = "(defvar v 0 \"vd\")\n(defun f () 1)\n";
+    fn docstring_refuses_missing_and_empty() {
+        let src = "(defun f () 1)\n";
         let (_d, p) = write_temp("a.el", src);
-        assert!(matches!(
-            set_docstring_in_file(&p, "v", "x", Dialect::EmacsLisp),
-            Err(DocstringError::NotAFunction(_))
-        ));
         assert!(matches!(
             set_docstring_in_file(&p, "ghost", "x", Dialect::EmacsLisp),
             Err(DocstringError::NotFound(_))
@@ -2898,5 +2922,47 @@ mod tests {
             Err(DocstringError::EmptyText)
         ));
         assert_eq!(std::fs::read_to_string(&p).unwrap(), src); // untouched on refusal
+    }
+
+    // ----- variable docstrings, v2 (ADR-0044) -----
+
+    #[test]
+    fn docstring_inserts_on_variable_after_value() {
+        let (_d, p) = write_temp("a.el", "(defvar my-var 0)\n");
+        let o = set_docstring_in_file(&p, "my-var", "The count.", Dialect::EmacsLisp).unwrap();
+        assert_eq!(o.action, DocstringAction::Inserted);
+        let r = std::fs::read_to_string(&p).unwrap();
+        assert!(r.contains("(defvar my-var 0\n  \"The count.\")"), "{r}");
+    }
+
+    #[test]
+    fn docstring_replaces_variable_and_handles_defcustom() {
+        // defvar with an existing docstring -> replace.
+        let (_d, p) = write_temp("a.el", "(defvar v 0 \"old\")\n");
+        let o = set_docstring_in_file(&p, "v", "new", Dialect::EmacsLisp).unwrap();
+        assert_eq!(o.action, DocstringAction::Replaced);
+        assert!(std::fs::read_to_string(&p).unwrap().contains("\"new\""));
+
+        // defcustom: docstring goes after the value, before the keyword args.
+        let (_d, p2) = write_temp("a.el", "(defcustom c 1 :type 'integer)\n");
+        let o2 = set_docstring_in_file(&p2, "c", "A knob.", Dialect::EmacsLisp).unwrap();
+        assert_eq!(o2.action, DocstringAction::Inserted);
+        let r2 = std::fs::read_to_string(&p2).unwrap();
+        assert!(r2.contains("\"A knob.\""), "{r2}");
+        assert!(r2.contains(":type 'integer"), "{r2}"); // keywords preserved
+    }
+
+    #[test]
+    fn docstring_refuses_valueless_defvar_and_scheme_value() {
+        let (_d, p) = write_temp("a.el", "(defvar bare)\n");
+        assert!(matches!(
+            set_docstring_in_file(&p, "bare", "x", Dialect::EmacsLisp),
+            Err(DocstringError::NoValue(_))
+        ));
+        let (_d, s) = write_temp("a.scm", "(define answer 42)\n");
+        assert!(matches!(
+            set_docstring_in_file(&s, "answer", "x", Dialect::Scheme),
+            Err(DocstringError::NoDocstringSlot(_))
+        ));
     }
 }
