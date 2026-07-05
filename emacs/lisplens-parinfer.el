@@ -21,12 +21,17 @@
 ;; `lisplens parinfer --server' process (a line-delimited JSON protocol) shared
 ;; across every buffer, instead of loading a dynamic module.
 ;;
-;; This file provides the explicit commands `lisplens-parinfer-paren' and
-;; `lisplens-parinfer-indent', plus a minor mode `lisplens-parinfer-mode' that
-;; binds them.  Firing on every edit (the live experience) is a separate layer.
+;; It provides the explicit commands `lisplens-parinfer-paren' and
+;; `lisplens-parinfer-indent', and a minor mode `lisplens-parinfer-mode' that
+;; runs one of them **live** — reflowing after each edit (debounced) so parens
+;; and indentation stay in sync as you type.
 ;;
 ;;   paren  — parens are the source of truth; indentation is corrected.
 ;;   indent — indentation is the source of truth; close-parens are inferred.
+;;
+;; Live mode uses indent (`lisplens-parinfer-live-mode') because it handles the
+;; unbalanced input that is normal mid-edit; the server's cursor-line protection
+;; keeps the trail on point's line from collapsing under you.
 ;;
 ;; On the server's refusal (unbalanced input, an unterminated string, …) the
 ;; buffer is left untouched and the diagnostic is echoed.
@@ -76,6 +81,19 @@ nil off."
   :type '(choice (const :tag "Follow nameless-mode" auto)
                  (const :tag "On" t)
                  (const :tag "Off" nil)))
+
+(defcustom lisplens-parinfer-live-mode 'indent
+  "Which mode `lisplens-parinfer-mode' runs live, on every edit.
+`indent' is the sensible choice: it handles the unbalanced input that is
+normal while typing.  `paren' requires balanced parens, so it refuses (does
+nothing) whenever the buffer is mid-edit — offered only for completeness."
+  :type '(choice (const :tag "Indent" indent)
+                 (const :tag "Paren" paren)))
+
+(defcustom lisplens-parinfer-idle-delay 0.05
+  "Idle seconds to wait before running a live transform after an edit.
+Coalesces bursts of fast typing into one server round-trip."
+  :type 'number)
 
 ;;; Server process ----------------------------------------------------------
 
@@ -152,8 +170,10 @@ beginning, keeping the cursor line/column arithmetic exact."
             (save-excursion (goto-char (region-end)) (line-end-position)))
     (cons (point-min) (point-max))))
 
-(defun lisplens-parinfer--run (mode)
-  "Transform the buffer (or region) with MODE (`paren' or `indent')."
+(defun lisplens-parinfer--run (mode &optional quiet)
+  "Transform the buffer (or region) with MODE (`paren' or `indent').
+With QUIET, a refusal is silent (no echo) — used by live firing, which would
+otherwise spam the echo area on every keystroke of an in-progress string."
   (let* ((bounds (lisplens-parinfer--bounds))
          (beg (car bounds))
          (end (cdr bounds))
@@ -171,15 +191,16 @@ beginning, keeping the cursor line/column arithmetic exact."
                                   (line-number-at-pos beg))
                    :cursorX (- (point) (line-beginning-position))))))
          (answer (lisplens-parinfer--request request)))
-    (lisplens-parinfer--apply answer beg end)))
+    (lisplens-parinfer--apply answer beg end quiet)))
 
-(defun lisplens-parinfer--apply (answer beg end)
-  "Apply ANSWER to the region BEG..END, or report its diagnostic on refusal."
+(defun lisplens-parinfer--apply (answer beg end &optional quiet)
+  "Apply ANSWER to the region BEG..END, or (unless QUIET) report its diagnostic."
   (if (not (eq (alist-get 'success answer) t))
-      (let ((err (alist-get 'error answer)))
-        (message "lisplens-parinfer: %s (%s)"
-                 (or (alist-get 'message err) "refused")
-                 (or (alist-get 'name err) "error")))
+      (unless quiet
+        (let ((err (alist-get 'error answer)))
+          (message "lisplens-parinfer: %s (%s)"
+                   (or (alist-get 'message err) "refused")
+                   (or (alist-get 'name err) "error"))))
     (let ((text (alist-get 'text answer))
           (cline (alist-get 'cursorLine answer))
           (cx (alist-get 'cursorX answer)))
@@ -210,13 +231,66 @@ beginning, keeping the cursor line/column arithmetic exact."
   "C-c C-p p" #'lisplens-parinfer-paren
   "C-c C-p i" #'lisplens-parinfer-indent)
 
+;;; Live firing -------------------------------------------------------------
+
+;; Forward declaration: the variable is created by the `define-minor-mode' below.
+(defvar lisplens-parinfer-mode)
+
+(defvar-local lisplens-parinfer--tick nil
+  "`buffer-chars-modified-tick' at the last live fire, to skip no-op commands.")
+
+(defvar-local lisplens-parinfer--timer nil
+  "Pending idle timer that will run the live transform for this buffer.")
+
+(defun lisplens-parinfer--fire (buffer)
+  "Run the live transform in BUFFER if it is still live and modified."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (setq lisplens-parinfer--timer nil)
+      (when lisplens-parinfer-mode
+        ;; A refusal (mid-edit unbalanced input) is silent; never let a server
+        ;; hiccup break the command loop.
+        (with-demoted-errors "lisplens-parinfer: %S"
+          (lisplens-parinfer--run lisplens-parinfer-live-mode t))
+        (setq lisplens-parinfer--tick (buffer-chars-modified-tick))))))
+
+(defun lisplens-parinfer--post-command ()
+  "Schedule a debounced live transform when this command changed the buffer."
+  (when (/= (buffer-chars-modified-tick) (or lisplens-parinfer--tick -1))
+    (setq lisplens-parinfer--tick (buffer-chars-modified-tick))
+    (when (timerp lisplens-parinfer--timer)
+      (cancel-timer lisplens-parinfer--timer))
+    (setq lisplens-parinfer--timer
+          (run-with-idle-timer lisplens-parinfer-idle-delay nil
+                               #'lisplens-parinfer--fire (current-buffer)))))
+
+(defun lisplens-parinfer--any-buffer-p ()
+  "Whether any live buffer still has `lisplens-parinfer-mode' on."
+  (seq-some (lambda (b) (buffer-local-value 'lisplens-parinfer-mode b))
+            (buffer-list)))
+
 ;;;###autoload
 (define-minor-mode lisplens-parinfer-mode
-  "Minor mode binding the lisplens parinfer commands.
-Provides `lisplens-parinfer-paren' and `lisplens-parinfer-indent'.  Firing on
-every edit (the live experience) is layered on top separately."
+  "Live parinfer for the current buffer, backed by the lisplens server.
+
+While on, every edit is reflowed by `lisplens-parinfer-live-mode' (indent by
+default) after a short idle delay, keeping parens and indentation in sync as you
+type; the cursor line's paren trail is left alone so it does not fight you.  The
+explicit commands `lisplens-parinfer-paren' / `lisplens-parinfer-indent' stay
+available under \\`C-c C-p'."
   :lighter " Parinfer"
-  :keymap lisplens-parinfer-mode-map)
+  :keymap lisplens-parinfer-mode-map
+  (if lisplens-parinfer-mode
+      (progn
+        (setq lisplens-parinfer--tick (buffer-chars-modified-tick))
+        (add-hook 'post-command-hook #'lisplens-parinfer--post-command nil t))
+    (remove-hook 'post-command-hook #'lisplens-parinfer--post-command t)
+    (when (timerp lisplens-parinfer--timer)
+      (cancel-timer lisplens-parinfer--timer)
+      (setq lisplens-parinfer--timer nil))
+    ;; Stop the shared process once nothing uses it.
+    (unless (lisplens-parinfer--any-buffer-p)
+      (lisplens-parinfer-restart))))
 
 (provide 'lisplens-parinfer)
 ;;; lisplens-parinfer.el ends here

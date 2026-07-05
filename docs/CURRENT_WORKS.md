@@ -31,8 +31,15 @@ one shared `parinfer --server` process; `lisplens-parinfer-paren`/`-indent` (+ a
 mode) transform the buffer/region with marker/point-preserving replace, dialect from
 major-mode, Nameless opt-in, refuse-unchanged on failure. Byte-compiles clean on Emacs 32;
 smoke-tested end-to-end (indent infers closers, paren reindents, unbalanced untouched,
-point survives, one process reused). `emacs/` excluded from the published crate. **Next:
-#33** — live fire-on-edit (`post-command-hook`, using the #31 cursor protection).
+point survives, one process reused). `emacs/` excluded from the published crate. **#33
+shipped** (this branch): `lisplens-parinfer-mode` is now a **live** minor mode —
+`post-command-hook` (debounced via an idle timer, fires only when the buffer changed)
+runs indent live so parens follow indentation as you type; refusals (mid-edit unbalanced)
+are silent, the #31 cursor protection keeps point's trail stable, and disabling removes
+the hook + stops the shared process when no buffer uses it. **The live-parinfer arc
+(#30–33) is complete** — server + cursor protection + Emacs mode + live firing, all
+shipped. Candidate follow-ups: defun-scoped live transforms for very large buffers;
+smart mode; MELPA packaging of the Emacs front-end.
 
 ## Prior arc (done): 0.3.0 release + the stateless parinfer command
 
