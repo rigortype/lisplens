@@ -79,9 +79,16 @@ Lisp–specific; on other dialects your edits are written as given.
 
 `lisplens mcp` runs a stdio JSON-RPC MCP server exposing the same operations as
 tools: `struct_read`, `line_read`, `struct_edit`, `line_edit`, `find`, `refs`,
-`format`. The edit tools take the patch as a `patch` string argument (same
-grammar as above; payloads are passed as JSON strings, so the `<<TAG` heredoc
-fencing is a CLI-only concern).
+`format`, `check`, `diff`, `rename`, `inline`, `docstring`, `rewrite`,
+`extract`, `parinfer`. The edit tools take the patch as a `patch` string
+argument (same grammar as above; payloads are passed as JSON strings, so the
+`<<TAG` heredoc fencing is a CLI-only concern).
+
+The `diff` tool mirrors `lisplens diff`: file mode takes `old` + `new` paths
+(add `deep` or `unit` to drill, `json` for structured output), and a **form
+mode** takes two form snippets as strings (`oldForm` + `newForm`, optional
+`dialect`) to structurally diff two forms with no files on disk — handy for
+comparing a form before/after an in-memory transform.
 
 Register it with Claude Code (project-local example) by adding to `.mcp.json`:
 ```json

@@ -2,3 +2,8 @@
 
 # Emacs byte-compiled files
 emacs/*.elc
+
+# Skill-creator eval workspace (scratch: transcripts, benchmarks, iterations)
+/skills/lisplens-workspace/
+# Large external eval fixtures (copies of Emacs cc-engine.el)
+/skills/lisplens/evals/inputs/cc-*.el

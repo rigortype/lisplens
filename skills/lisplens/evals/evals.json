@@ -1,0 +1,83 @@
+{
+  "skill_name": "lisplens",
+  "evals": [
+    {
+      "id": 0,
+      "name": "which-defs-changed-map",
+      "prompt": "I have two versions of an Emacs Lisp file, util-old.el and util-new.el. Tell me which top-level definitions changed, which were added, and which were removed between them. I don't want a line-by-line diff \u2014 just the structural picture, and please don't flag functions that only got reindented.",
+      "expected_output": "Reports util-greet as changed, util-scale as added, util-legacy as removed; does NOT report util-add (reindent-only) or util-count (unchanged) as changed.",
+      "files": [
+        "inputs/util-old.el",
+        "inputs/util-new.el"
+      ],
+      "assertions": [
+        {
+          "text": "Reports util-greet as CHANGED"
+        },
+        {
+          "text": "Reports util-scale as ADDED"
+        },
+        {
+          "text": "Reports util-legacy as REMOVED"
+        },
+        {
+          "text": "Does NOT report util-add as changed (reindent-only)"
+        },
+        {
+          "text": "Does NOT claim util-count changed"
+        },
+        {
+          "text": "Structural summary, not a raw line-by-line diff"
+        }
+      ]
+    },
+    {
+      "id": 1,
+      "name": "how-did-defun-change-drill",
+      "prompt": "Between proc-old.el and proc-new.el, how did the function proc-run change? I care about how its logic changed, not formatting.",
+      "expected_output": "Identifies the specific changes inside proc-run: the guard flipped from (when (proc-ready-p) ...) to (unless (and (not force) (proc-busy-p)) ...), a new &optional force parameter, and an added (proc-log it) call.",
+      "files": [
+        "inputs/proc-old.el",
+        "inputs/proc-new.el"
+      ],
+      "assertions": [
+        {
+          "text": "Identifies the guard change from (when (proc-ready-p) ...) to (unless ...)"
+        },
+        {
+          "text": "Identifies the new &optional force parameter"
+        },
+        {
+          "text": "Identifies the added (proc-log it) call"
+        },
+        {
+          "text": "Describes logic change, not formatting noise"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "large-file-release-summary",
+      "prompt": "cc-30.el and cc-31.el are two versions of Emacs's cc-engine.el (~16k lines each). Give me a structural summary of what changed at the definition level between them \u2014 which functions were added, removed, or changed \u2014 without paging through a giant textual diff.",
+      "expected_output": "Produces a compact definition-level summary (added/removed/changed function names) rather than a raw textual diff, and correctly reports e.g. c-inside-bracelist-p removed and new functions like c-in-id-arglist / c-looking-at-c++-lambda-expression added.",
+      "files": [
+        "inputs/cc-30.el",
+        "inputs/cc-31.el"
+      ],
+      "assertions": [
+        {
+          "text": "Compact definition-level list (added/removed/changed names), not a raw textual diff"
+        },
+        {
+          "text": "Reports c-inside-bracelist-p as removed"
+        },
+        {
+          "text": "Reports a real added function (e.g. c-in-id-arglist / c-looking-at-c++-lambda-expression)"
+        },
+        {
+          "text": "Does not rely on dumping the entire ~16k-line files verbatim"
+        }
+      ]
+    }
+  ]
+}
