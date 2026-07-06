@@ -44,6 +44,8 @@ lisplens line   edit <file>          apply a Line-hash patch from stdin
 lisplens find <name> [dir]           find definitions by name across a project
 lisplens refs <name> [dir]           find symbol occurrences (code/data tagged)
 lisplens check  <file>               parse-check; diagnostics, non-zero on errors
+lisplens diff <old> <new>            structural diff by definition (modulo formatting);
+                                     --deep/--unit drill how a def changed; --html a visual page
 lisplens rename <old> <new> <file>   rename a symbol file-wide (symbol-exact, safe)
 lisplens inline <name> <file>        inline a function at its call sites (safe subset)
 lisplens docstring <name> <file>     set/replace a definition's docstring (text on stdin)
@@ -53,6 +55,8 @@ lisplens extract <file> <anchor> <name> [param...]
 lisplens format <file>               reindent by dialect (native engines; honors
                                      Emacs file-local vars, .dir-locals.el, .editorconfig)
 lisplens mcp                         run the MCP server over stdio
+lisplens version                     name, version, build stamp, copyright, license pointer
+lisplens license                     full license text (lisplens + bundled dependencies)
 ```
 
 ### Reading
@@ -161,13 +165,17 @@ and its project:
 
 Stable CLI and MCP server: both addressing modes (read, expand, edit — including
 structural `insert-after`/`insert-before` inside a form), project queries
-(`find`, `refs`), a standalone `check`, and the refactoring commands (`rename`,
+(`find`, `refs`), a standalone `check`, the refactoring commands (`rename`,
 `inline`, `docstring`, `rewrite`, `extract`) — all validate-then-write and
-drift-checked. `format` has native indent engines for Emacs Lisp, Common Lisp, the
+drift-checked — and structural `diff` (a definition-level change map, `--deep`/`--unit`
+to drill how a definition changed, and an `--html` visual view). `format` has native
+indent engines for Emacs Lisp, Common Lisp, the
 Scheme family, Clojure, and Phel (each byte-exact against its oracle) plus
 Fennel, Janet, Hy, and LFE (body-indent tables, ~67–92% match); only EDN data
 rides the generic Emacs Lisp fallback.
 
 ## License
 
-Licensed under the Mozilla Public License 2.0 (MPL-2.0).
+Licensed under the Mozilla Public License 2.0 (MPL-2.0). Pre-built binaries bundle
+third-party Rust dependencies under permissive licenses (MIT, Apache-2.0, …);
+`lisplens license` prints the full notices for lisplens and every bundled dependency.
