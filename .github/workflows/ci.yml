@@ -22,6 +22,16 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Test
         run: cargo test
+      - name: Third-party licenses up to date
+        # The embedded THIRD-PARTY-LICENSES.md must match the current dependency
+        # tree — a binary-only distribution relies on it for its deps' notices.
+        # Regenerate and fail if it drifted (someone changed deps without running
+        # `node scripts/generate-third-party-licenses.mjs`). `cargo test` above has
+        # already fetched the sources the generator reads.
+        run: |
+          node scripts/generate-third-party-licenses.mjs
+          git diff --exit-code -- THIRD-PARTY-LICENSES.md \
+            || { echo "::error::THIRD-PARTY-LICENSES.md is stale — run: node scripts/generate-third-party-licenses.mjs"; exit 1; }
       - name: Docs
         run: cargo doc --no-deps
         env:
