@@ -136,7 +136,8 @@ fn tools() -> Value {
                 "oldForm": json!({ "type": "string", "description": "old form snippet (form mode; with newForm)" }),
                 "newForm": json!({ "type": "string", "description": "new form snippet (form mode; with oldForm)" }),
                 "dialect": json!({ "type": "string", "description": "dialect for form mode, kebab-case (default emacs-lisp)" }),
-                "json": json!({ "type": "boolean", "description": "return the structured JSON diff instead of text (default false)" })
+                "json": json!({ "type": "boolean", "description": "return the structured JSON diff instead of text (default false)" }),
+                "html": json!({ "type": "boolean", "description": "return a self-contained HTML page visualizing the diff, for a human to open (default false; mutually exclusive with json)" })
             }),
             &[]
         ),
@@ -282,6 +283,7 @@ fn run_tool(name: &str, args: &Value) -> Result<String, String> {
         "parinfer" => Ok(crate::parinfer::run_json(args).to_string()),
         "diff" => {
             let json = args.get("json").and_then(Value::as_bool).unwrap_or(false);
+            let html = args.get("html").and_then(Value::as_bool).unwrap_or(false);
             // Form-string mode: compare two form snippets directly (ADR-0048's
             // general two-form primitive), no files.
             if let (Some(of), Some(nf)) = (
@@ -295,6 +297,7 @@ fn run_tool(name: &str, args: &Value) -> Result<String, String> {
                     .unwrap_or(crate::Dialect::EmacsLisp);
                 return Ok(match crate::diff::diff_source_forms(of, nf, dialect) {
                     None => String::new(),
+                    Some(d) if html => crate::diff::form_diff_html(&d),
                     Some(d) if json => crate::diff::form_diff_json(&d).to_string(),
                     Some(d) => crate::diff::form_diff_text(&d),
                 });
@@ -308,14 +311,18 @@ fn run_tool(name: &str, args: &Value) -> Result<String, String> {
             let deep = unit.is_some() || args.get("deep").and_then(Value::as_bool).unwrap_or(false);
             Ok(if deep {
                 let d = crate::diff::diff_files_deep(&old_src, &new_src, dialect, unit);
-                if json {
+                if html {
+                    crate::diff::deep_html(&d)
+                } else if json {
                     crate::diff::deep_json(&d).to_string()
                 } else {
                     crate::diff::deep_text(&d)
                 }
             } else {
                 let d = crate::diff::diff_files(&old_src, &new_src, dialect);
-                if json {
+                if html {
+                    crate::diff::diff_html(&d)
+                } else if json {
                     crate::diff::diff_json(&d).to_string()
                 } else {
                     crate::diff::diff_text(&d)

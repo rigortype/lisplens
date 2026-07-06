@@ -880,6 +880,262 @@ pub fn deep_json(diff: &DeepDiff) -> serde_json::Value {
     })
 }
 
+// ---- HTML rendering (#42) --------------------------------------------------
+//
+// A self-contained, human-facing view of a diff for eyeball reading. It renders
+// the *same* structures the text/JSON renderers use — no re-parsing, no new diff
+// logic — into one standalone HTML document (inline CSS, no external assets), so
+// an agent can hand the file to a person or open it in a browser.
+
+/// HTML-escape a source fragment. Lisp is full of `<`/`>`/`&` (cc-engine's
+/// `c-forward-<>-arglist`, `&optional`, string literals), so every fragment,
+/// name, and preview must pass through here before landing in the document.
+fn esc(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+const HTML_STYLE: &str = "\
+:root{--add:#1a7f37;--add-bg:#e6f4ea;--del:#b3261e;--del-bg:#fbeae9;\
+--chg:#8a5a00;--chg-bg:#fbf0d9;--ink:#1b1f24;--muted:#6a737d;--line:#e2e5ea;--bg:#f6f7f8}\
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);\
+font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}\
+.wrap{max-width:960px;margin:0 auto;padding:28px 20px}\
+h1{font-size:20px;margin:0 0 4px}.sub{color:var(--muted);font-size:13px;margin-bottom:16px}\
+.pills{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:22px}\
+.pill{font:600 12px ui-monospace,Menlo,monospace;padding:3px 10px;border-radius:999px;border:1px solid var(--line);background:#fff}\
+.pill.add{color:var(--add);background:var(--add-bg);border-color:transparent}\
+.pill.del{color:var(--del);background:var(--del-bg);border-color:transparent}\
+.pill.chg{color:var(--chg);background:var(--chg-bg);border-color:transparent}\
+.unit{background:#fff;border:1px solid var(--line);border-radius:10px;margin:0 0 14px;overflow:hidden}\
+.uhead{display:flex;gap:8px;align-items:baseline;padding:10px 14px;border-bottom:1px solid var(--line);\
+font:13px ui-monospace,Menlo,monospace}.uhead .mk{font-weight:700}\
+.uhead .k{color:var(--muted)}.uhead .n{font-weight:600}.uhead .a{margin-left:auto;color:var(--muted);font-size:12px}\
+.mk.add,.k.add{color:var(--add)}.mk.del,.k.del{color:var(--del)}.mk.chg{color:var(--chg)}\
+.tree{margin:0;padding:12px 14px;font:12.5px/1.55 ui-monospace,Menlo,monospace;overflow-x:auto;white-space:pre}\
+.row{white-space:pre}.row.add{color:var(--add)}.row.del{color:var(--del)}\
+.row .rep-old{color:var(--del);text-decoration:line-through;text-decoration-color:#d9a} \
+.row .rep-new{color:var(--add)}.row .arrow{color:var(--muted)}.row .lbl{color:var(--chg)}\
+.ell{color:var(--muted)}.empty{color:var(--muted);padding:8px 14px;font-style:italic}\
+footer{color:var(--muted);font:12px ui-monospace,Menlo,monospace;margin-top:8px}";
+
+fn page(title: &str, body: &str) -> String {
+    format!(
+        "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\
+<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
+<title>{}</title><style>{}</style></head><body><div class=\"wrap\">{}</div></body></html>\n",
+        esc(title),
+        HTML_STYLE,
+        body
+    )
+}
+
+fn pad_em(depth: usize) -> String {
+    format!("padding-left:{}em", depth as f32 * 1.4)
+}
+
+fn sig_html(signature: &Option<String>) -> String {
+    signature
+        .as_deref()
+        .map(|s| format!(" {}", esc(s)))
+        .unwrap_or_default()
+}
+
+/// Render a [`FileDiff`] as a standalone HTML page (the definition-level map).
+pub fn diff_html(diff: &FileDiff) -> String {
+    let mut b = String::new();
+    b.push_str("<h1>Structural diff</h1><div class=\"sub\">definition-level map</div>");
+    b.push_str(&summary_pills(
+        count(diff, UnitStatus::Changed),
+        count(diff, UnitStatus::Added),
+        count(diff, UnitStatus::Removed),
+        diff.other_forms_changed,
+    ));
+    if diff.is_empty() {
+        b.push_str("<div class=\"empty\">No structural change.</div>");
+        return page("Structural diff", &b);
+    }
+    for (status, cls) in [
+        (UnitStatus::Changed, "chg"),
+        (UnitStatus::Added, "add"),
+        (UnitStatus::Removed, "del"),
+    ] {
+        let mut rows: Vec<&UnitDiff> = diff.units.iter().filter(|u| u.status == status).collect();
+        if rows.is_empty() {
+            continue;
+        }
+        rows.sort_by_key(|u| u.line);
+        for u in rows {
+            b.push_str(&format!(
+                "<div class=\"unit\"><div class=\"uhead\"><span class=\"mk {cls}\">{}</span>\
+<span class=\"k\">{}</span> <span class=\"n\">{}</span>{}<span class=\"a\">{}:{}</span></div></div>",
+                status.marker(),
+                esc(&u.kind),
+                esc(&u.name),
+                sig_html(&u.signature),
+                u.line,
+                esc(&u.hash),
+            ));
+        }
+    }
+    page("Structural diff", &b)
+}
+
+/// Render a [`DeepDiff`] as a standalone HTML page (per-unit trees + Lenses).
+pub fn deep_html(diff: &DeepDiff) -> String {
+    let mut b = String::new();
+    b.push_str("<h1>Structural diff</h1><div class=\"sub\">how each definition changed</div>");
+    b.push_str(&summary_pills(
+        diff.changed.len(),
+        diff.added.len(),
+        diff.removed.len(),
+        false,
+    ));
+    if diff.is_empty() {
+        b.push_str("<div class=\"empty\">No structural change.</div>");
+        return page("Structural diff", &b);
+    }
+    for u in &diff.changed {
+        b.push_str(&format!(
+            "<div class=\"unit\"><div class=\"uhead\"><span class=\"mk chg\">~</span>\
+<span class=\"k\">{}</span> <span class=\"n\">{}</span>{}<span class=\"a\">{}:{}</span></div>\
+<div class=\"tree\">",
+            esc(&u.kind),
+            esc(&u.name),
+            sig_html(&u.signature),
+            u.line,
+            esc(&u.hash),
+        ));
+        html_form_diff(&u.diff, 0, &mut b);
+        b.push_str("</div></div>");
+    }
+    for (units, cls, mk) in [(&diff.added, "add", "+"), (&diff.removed, "del", "-")] {
+        for u in units {
+            b.push_str(&format!(
+                "<div class=\"unit\"><div class=\"uhead\"><span class=\"mk {cls}\">{mk}</span>\
+<span class=\"k {cls}\">{}</span> <span class=\"n\">{}</span>{}<span class=\"a\">{}:{}</span></div>\
+<div class=\"tree\">",
+                esc(&u.kind),
+                esc(&u.name),
+                sig_html(&u.signature),
+                u.line,
+                esc(&u.hash),
+            ));
+            for node in u.lens.iter().skip(1) {
+                b.push_str(&format!(
+                    "<div class=\"row\" style=\"{}\">{}  {}</div>",
+                    pad_em(node.depth as usize),
+                    esc(&node.hash),
+                    esc(&node.preview)
+                ));
+            }
+            b.push_str("</div></div>");
+        }
+    }
+    page("Structural diff", &b)
+}
+
+fn count(diff: &FileDiff, status: UnitStatus) -> usize {
+    diff.units.iter().filter(|u| u.status == status).count()
+}
+
+fn summary_pills(changed: usize, added: usize, removed: usize, other: bool) -> String {
+    let mut s = String::from("<div class=\"pills\">");
+    s.push_str(&format!(
+        "<span class=\"pill chg\">~ {changed} changed</span>"
+    ));
+    s.push_str(&format!("<span class=\"pill add\">+ {added} added</span>"));
+    s.push_str(&format!(
+        "<span class=\"pill del\">- {removed} removed</span>"
+    ));
+    if other {
+        s.push_str("<span class=\"pill\">! other top-level forms</span>");
+    }
+    s.push_str("</div>");
+    s
+}
+
+fn html_form_diff(diff: &FormDiff, depth: usize, out: &mut String) {
+    match diff {
+        FormDiff::Replace { old, new } => {
+            out.push_str(&format!(
+                "<div class=\"row\" style=\"{}\"><span class=\"mk chg\">~</span> \
+<span class=\"rep-old\">{}</span> <span class=\"arrow\">⇒</span> <span class=\"rep-new\">{}</span></div>",
+                pad_em(depth),
+                esc(&old.text),
+                esc(&new.text)
+            ));
+        }
+        FormDiff::Descend {
+            label,
+            child_count,
+            children,
+        } => {
+            out.push_str(&format!(
+                "<div class=\"row\" style=\"{}\">(<span class=\"lbl\">{}</span></div>",
+                pad_em(depth),
+                esc(label)
+            ));
+            let mut prev: Option<usize> = None;
+            for child in children {
+                let idx = child_index(child);
+                if prev.map_or(idx > 0, |p| idx > p + 1) {
+                    out.push_str(&format!(
+                        "<div class=\"row ell\" style=\"{}\">…</div>",
+                        pad_em(depth + 1)
+                    ));
+                }
+                html_child_diff(child, depth + 1, out);
+                prev = Some(idx);
+            }
+            if prev.map_or(*child_count > 0, |p| p + 1 < *child_count) {
+                out.push_str(&format!(
+                    "<div class=\"row ell\" style=\"{}\">…</div>",
+                    pad_em(depth + 1)
+                ));
+            }
+            out.push_str(&format!(
+                "<div class=\"row\" style=\"{}\">)</div>",
+                pad_em(depth)
+            ));
+        }
+    }
+}
+
+fn html_child_diff(child: &ChildDiff, depth: usize, out: &mut String) {
+    match child {
+        ChildDiff::Added { frag, .. } => out.push_str(&format!(
+            "<div class=\"row add\" style=\"{}\">+ {}</div>",
+            pad_em(depth),
+            esc(&frag.text)
+        )),
+        ChildDiff::Removed { frag, .. } => out.push_str(&format!(
+            "<div class=\"row del\" style=\"{}\">- {}</div>",
+            pad_em(depth),
+            esc(&frag.text)
+        )),
+        ChildDiff::Paired { diff, .. } => html_form_diff(diff, depth, out),
+    }
+}
+
+/// Render a single [`FormDiff`] (the two-form primitive) as a standalone HTML page.
+pub fn form_diff_html(diff: &FormDiff) -> String {
+    let mut b = String::from("<h1>Structural diff</h1><div class=\"sub\">two forms</div>");
+    b.push_str("<div class=\"unit\"><div class=\"tree\">");
+    html_form_diff(diff, 0, &mut b);
+    b.push_str("</div></div>");
+    page("Structural diff", &b)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1096,6 +1352,43 @@ mod tests {
         );
         // Every Lens node carries a usable anchor hash.
         assert!(added.lens.iter().all(|n| n.hash.len() == 4));
+    }
+
+    #[test]
+    fn html_is_self_contained_and_escaped() {
+        // Changed atoms carrying `<`/`>`/`&` — those fragments DO appear in the
+        // pruned tree (unchanged ones are elided), so the escaping must hold.
+        let d = diff_source_forms("(f x y)", "(f c-fwd-<>-a a&b)", Dialect::EmacsLisp).unwrap();
+        let html = form_diff_html(&d);
+        assert!(html.starts_with("<!doctype html>"), "not a full page");
+        // Self-contained: no external network / asset references.
+        assert!(!html.contains("http://") && !html.contains("https://"));
+        assert!(!html.contains("<script") && !html.contains("<link") && !html.contains(" src="));
+        // Special characters in the changed fragments are escaped, never raw.
+        assert!(
+            html.contains("c-fwd-&lt;&gt;-a"),
+            "angle brackets must be escaped"
+        );
+        assert!(
+            !html.contains("c-fwd-<>-a"),
+            "raw `<>` would break the markup"
+        );
+        assert!(html.contains("a&amp;b"), "the `&` must be escaped");
+    }
+
+    #[test]
+    fn html_map_marks_added_removed_changed() {
+        let old = "(defun keep () 1)\n(defun gone () 2)\n(defun edit () 3)\n";
+        let new = "(defun keep () 1)\n(defun edit () 30)\n(defun fresh () 4)\n";
+        let html = diff_html(&diff_files(old, new, Dialect::EmacsLisp));
+        assert!(html.starts_with("<!doctype html>"));
+        for name in ["edit", "fresh", "gone"] {
+            assert!(html.contains(name), "missing unit {name} in map html");
+        }
+        // Summary pills reflect the counts.
+        assert!(
+            html.contains("1 changed") && html.contains("1 added") && html.contains("1 removed")
+        );
     }
 
     #[test]

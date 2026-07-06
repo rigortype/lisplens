@@ -151,6 +151,7 @@ fn run_line_read(path: PathBuf) -> ExitCode {
 /// whether or not there are differences; non-zero is reserved for real errors.
 fn run_diff(args: &[&str]) -> ExitCode {
     let mut json = false;
+    let mut html = false;
     let mut deep = false;
     let mut unit: Option<&str> = None;
     let mut files: Vec<&str> = Vec::new();
@@ -158,6 +159,7 @@ fn run_diff(args: &[&str]) -> ExitCode {
     while i < args.len() {
         match args[i] {
             "--json" => json = true,
+            "--html" => html = true,
             "--deep" => deep = true,
             "--unit" => {
                 let Some(name) = args.get(i + 1) else {
@@ -194,17 +196,25 @@ fn run_diff(args: &[&str]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    if json && html {
+        eprintln!("lisplens: diff: choose one of --json / --html, not both");
+        return ExitCode::FAILURE;
+    }
     let dialect = resolve_dialect(Path::new(new));
     if deep || unit.is_some() {
         let deep = lisplens::diff::diff_files_deep(&old_src, &new_src, dialect, unit);
-        if json {
+        if html {
+            print!("{}", lisplens::diff::deep_html(&deep));
+        } else if json {
             println!("{}", lisplens::diff::deep_json(&deep));
         } else {
             print!("{}", lisplens::diff::deep_text(&deep));
         }
     } else {
         let diff = lisplens::diff::diff_files(&old_src, &new_src, dialect);
-        if json {
+        if html {
+            print!("{}", lisplens::diff::diff_html(&diff));
+        } else if json {
             println!("{}", lisplens::diff::diff_json(&diff));
         } else {
             print!("{}", lisplens::diff::diff_text(&diff));
@@ -762,7 +772,7 @@ usage:
   lisplens parinfer <paren|indent> [--json] [--nameless] [--name N|--file P] [--cursor-line N --cursor-x M]  parinfer-style transform of stdin->stdout (ADR-0045)
   lisplens parinfer --server    persistent line-delimited JSON parinfer server for editors (ADR-0046)
   lisplens check <file>         parse-check a Lisp file (diagnostics; non-zero on errors)
-  lisplens diff <old> <new> [--json] [--deep|--unit NAME]   structural diff: definition map (ADR-0047), or drill a changed def's internals (--deep/--unit, ADR-0048)
+  lisplens diff <old> <new> [--json|--html] [--deep|--unit NAME]   structural diff: definition map (ADR-0047), or drill a changed def (--deep/--unit, ADR-0048); --html = self-contained visual page (#42)
   lisplens rename <old> <new> <file>   rename a symbol across a file (symbol-exact, safe)
   lisplens inline <name> <file>        inline a function at its call sites (safe subset)
   lisplens docstring <name> <file>     set/replace a function-like def's docstring (text on stdin)

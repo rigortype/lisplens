@@ -96,6 +96,17 @@ Full-verbatim added bodies stay a possible `--verbose` opt-in, not the default.
 each entry `changed`/`added`/`removed` and carries the Lens nodes on the latter
 two.
 
+## HTML view (#42)
+
+A third renderer, `--html` (`diff_html` / `deep_html` / `form_diff_html`), turns
+the *same* `FileDiff` / `DeepDiff` / `FormDiff` structures into a self-contained
+HTML page for a human to open — no re-parsing, no new diff logic, just a view.
+Inline styles, no external assets (so it works offline and as a handed-off file);
+added/removed/replaced marked by colour, unchanged siblings elided to `…`. Every
+fragment is HTML-escaped — non-negotiable, since Lisp source is full of `<`/`>`/`&`
+(`c-forward-<>-arglist`, `&optional`). It is orthogonal to `--deep`/`--unit` and
+mutually exclusive with `--json`.
+
 ## Non-goals (documented, tested)
 
 - **Moves / reorders / tree-edit-distance are out of scope.** A reordered subform
