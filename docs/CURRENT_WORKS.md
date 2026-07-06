@@ -4,30 +4,43 @@ Ephemeral snapshot. **Durable knowledge is in the dev docs** (see `AGENTS.md` �
 Codebase): `docs/dev/architecture.md`, `docs/dev/formatter.md`, `CONTEXT.md`,
 `docs/adr/`.
 
-## Handoff — resume here: Structural diff landed (unreleased); next is #42 (graphical) or a release
+## Handoff — resume here: Structural diff feature complete (unreleased); next is a release (or verify parinfer)
 
-**Where.** On **`master`**, clean, at `c8cacf8` (merge of PR #43). The **Structural
-diff** feature is in but **not yet released** — a `[Unreleased]` CHANGELOG entry is
-staged for the next version bump.
+**Where.** On **`master`**, clean, at `bd15ef5` (merge of PR #46). The whole
+**Structural diff** feature is in but **not yet released** — the `[Unreleased]`
+CHANGELOG section holds all of it, ready for the next version bump (0.4.0 → 0.5.0
+via the `lisplens-release-prep` skill). No open issues.
 
-**What just shipped — the Structural diff arc (#39–#41, PR #43).** A `diff` command +
-MCP `diff` tool that compares two versions of a Lisp file *modulo formatting*, so an
-agent sees how a definition's logic changed. Two levels: **definition-level attention
-map** (`diff <old> <new>`, ADR-0047 — added/removed/changed, keyed
-`(kind, name, dispatch?)`, changed iff not `struct_eq`) and the **intra-unit tree diff**
-(`diff --deep` / `--unit NAME`, ADR-0048 — struct_eq-LCS child alignment + positional gap
-pairing, category-gated recursion with the head as child 0, four statuses, pruned-tree
-text + JSON with editing anchors). The MCP tool adds a form-snippet mode
-(`oldForm`/`newForm`) — the general two-form primitive. New glossary term **Structural
-diff** in `CONTEXT.md`; `struct_eq`/`opt_eq` lifted into a shared `src/sexpr.rs` (#39).
-Verified on `cc-engine.el` emacs-30 → emacs-31 (53 changed / 13 added / 2 removed). A
-duplicate-key bug (Emacs's `(defvar x)` forward-decl + `(defvar x nil)` mispaired,
-phantom self-diff changes) was found and fixed with a regression test. 231 tests.
+**What shipped — the Structural diff arc (#39–#42, #44; PRs #43/#45/#46).** A `diff`
+command + MCP `diff` tool that compares two versions of a Lisp file *modulo formatting*,
+so an agent sees *how a definition's logic changed*:
+- **Definition-level map** (`diff <old> <new>`, ADR-0047) — added/removed/changed, keyed
+  `(kind, name, dispatch?)`, changed iff not `struct_eq`; exit 0 regardless of diffs.
+- **Intra-unit tree diff** (`diff --deep` / `--unit NAME`, ADR-0048) — struct_eq-LCS child
+  alignment + positional gap pairing, category-gated recursion (head as child 0), four
+  statuses, pruned-tree text + JSON with editing anchors. **Added/removed defs render
+  their `expand` Lens** (#44) so you see what a new def contains, token-bounded.
+- **HTML view** (`diff --html`, #42) — the same structures as a self-contained page
+  (inline CSS, no assets, every fragment HTML-escaped) for a human to open.
+- MCP mirrors all of it, plus a **form-snippet mode** (`oldForm`/`newForm`) — the general
+  two-form primitive. `struct_eq`/`opt_eq` live in shared `src/sexpr.rs` (#39); glossary
+  term **Structural diff** in `CONTEXT.md`. Verified end-to-end on `cc-engine.el` emacs-30
+  → emacs-31. A duplicate-key bug (Emacs's `(defvar x)` forward-decl + `(defvar x nil)`
+  mispaired → phantom self-diff) was found and fixed with a regression test. 235 tests.
 
-**Next up — #42, the graphical view (deferred, open).** The staged HTML/SVG visualization
-of a unit's structural diff, consuming ADR-0048's JSON DiffTree — the "human eyeball"
-half of the two-level plan. Nothing blocks it. Alternatively, cut a release to ship the
-diff feature (the `[Unreleased]` entry is ready).
+**Also landed — the lisplens agent-skill gained a `diff` section (v0.1.0 → v0.2.2).**
+`skills/lisplens/SKILL.md` now covers the structural diff, and was **tuned over three
+tested iterations against subagent transcript tool-traces** (dropped a self-inflicted
+`lisplens --help` round-trip; told agents the diff tree is complete so they stop
+re-reading raw source; matched drill depth to the question after an over-eager `--deep`
+rule backfired on a 16k-line file). Method + data in
+`docs/notes/20260706-struct-diff-skill-iteration.md`. Deferred: the skill's *description*
+triggering-optimization loop (skill-creator), not yet run.
+
+**Next up — cut a release.** Everything in `[Unreleased]` (diff map / `--deep`+`--unit` /
+added-body Lens / `--html`) is ready; a 0.5.0 bump ships it. Alternatively, the framing
+experiment surfaced one more candidate (not filed): a `--verbose`/full-verbatim added-body
+option, since `--deep`'s Lens is preview-only.
 
 **The other open thread (unchanged): verify parinfer on real Emacs.** The Emacs companion
 `emacs/lisplens-parinfer.el` (0.4.0 preview) is byte-compile-clean and batch-smoke-tested
