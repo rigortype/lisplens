@@ -797,15 +797,21 @@ const LICENSE_MPL: &str = include_str!("../LICENSE");
 /// `scripts/generate-third-party-licenses.mjs` and embedded for the same reason.
 const THIRD_PARTY_LICENSES: &str = include_str!("../THIRD-PARTY-LICENSES.md");
 
-/// The `--version` banner: name, version, copyright, and a pointer to `license`.
+/// The `--version` banner — compact, php/ruby style: name + version + build stamp
+/// + repo, copyright, and a one-line pointer to `license` for the full notices.
 fn version_text() -> String {
+    // Note: no `\`-continuations across the indented lines — that escape eats the
+    // next line's leading whitespace, which would drop the 4-space indent.
     format!(
-        "lisplens {}\n{}\nCopyright (c) {}\n\
-Licensed under MPL-2.0. This binary also bundles third-party Rust dependencies \
-under MIT, Apache-2.0, and other permissive licenses.\n\
-Run `lisplens license` for the full license text — lisplens's own license plus \
-every bundled dependency's notice.",
+        concat!(
+            "lisplens {} ({} revision {}) - {}\n",
+            "Copyright (c) TypedDuck, {}\n",
+            "    Built with the help of many third-party libraries.\n",
+            "    Run `lisplens license` to see all dependencies and their licenses.",
+        ),
         env!("CARGO_PKG_VERSION"),
+        env!("LISPLENS_BUILD_DATE"),
+        env!("LISPLENS_GIT_REV"),
         env!("CARGO_PKG_REPOSITORY"),
         env!("CARGO_PKG_AUTHORS"),
     )
@@ -854,16 +860,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn version_banner_has_name_version_copyright_and_license_pointer() {
+    fn version_banner_has_name_version_stamp_copyright_and_license_pointer() {
         let v = version_text();
-        assert!(v.starts_with("lisplens "));
-        assert!(v.contains(env!("CARGO_PKG_VERSION")));
+        assert!(v.starts_with(&format!("lisplens {} (", env!("CARGO_PKG_VERSION"))));
+        // Build stamp: a YYYY-MM-DD date and a revision, captured by build.rs.
+        assert!(v.contains("revision "));
+        assert!(
+            v.contains(env!("LISPLENS_BUILD_DATE")) && env!("LISPLENS_BUILD_DATE").len() == 10,
+            "banner carries the build date"
+        );
         assert!(v.contains("Copyright (c)"));
-        assert!(v.contains("MPL-2.0"));
         assert!(
             v.contains("lisplens license"),
             "must point at the license command"
         );
+        assert_eq!(v.lines().count(), 4, "compact banner is four lines");
     }
 
     #[test]
