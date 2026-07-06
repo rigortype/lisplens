@@ -693,7 +693,7 @@ THE SOFTWARE.
 
 Used by:
 
-- lisplens 0.4.0 — https://github.com/rigortype/lisplens
+- lisplens 0.5.0 — https://github.com/rigortype/lisplens
 
 ```text
 Mozilla Public License Version 2.0
