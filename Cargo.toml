@@ -10,8 +10,11 @@ authors = ["USAMI Kenta <tadsan@zonu.me>"]
 keywords = ["lisp", "s-expression", "editing", "mcp", "agent"]
 categories = ["command-line-utilities", "development-tools"]
 # Keep the published crate to code + user docs; agent/CI tooling and the
-# developer-facing ADRs aren't shipped.
-exclude = ["/.github", "/.claude", "/skills", "/emacs", "/AGENTS.md", "/CLAUDE.md", "/docs/adr", "/docs/notes", "/docs/lispexp-feedback"]
+# developer-facing ADRs aren't shipped. `THIRD-PARTY-LICENSES.md` and `LICENSE`
+# stay (the `license` command `include_str!`s them); `/scripts` (the generator)
+# and `/licenses` (its Apache canonical text, already inlined into the generated
+# file) are dev-only.
+exclude = ["/.github", "/.claude", "/skills", "/emacs", "/scripts", "/licenses", "/AGENTS.md", "/CLAUDE.md", "/docs/adr", "/docs/notes", "/docs/lispexp-feedback"]
 
 [dependencies]
 lispexp = "0.7"
