@@ -22,16 +22,23 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Test
         run: cargo test
+      - name: Install cargo-about + cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about,cargo-deny
+      - name: License audit
+        # Fail if any dependency uses a license outside deny.toml's allow list —
+        # so a new dep under an unexpected (e.g. copyleft) license can't slip in.
+        run: cargo deny check licenses
       - name: Third-party licenses up to date
         # The embedded THIRD-PARTY-LICENSES.md must match the current dependency
         # tree — a binary-only distribution relies on it for its deps' notices.
-        # Regenerate and fail if it drifted (someone changed deps without running
-        # `node scripts/generate-third-party-licenses.mjs`). `cargo test` above has
-        # already fetched the sources the generator reads.
+        # Regenerate with cargo-about and fail if it drifted (deps changed without
+        # `cargo about generate about.hbs -o THIRD-PARTY-LICENSES.md`).
         run: |
-          node scripts/generate-third-party-licenses.mjs
+          cargo about generate about.hbs -o THIRD-PARTY-LICENSES.md
           git diff --exit-code -- THIRD-PARTY-LICENSES.md \
-            || { echo "::error::THIRD-PARTY-LICENSES.md is stale — run: node scripts/generate-third-party-licenses.mjs"; exit 1; }
+            || { echo "::error::THIRD-PARTY-LICENSES.md is stale — run: cargo about generate about.hbs -o THIRD-PARTY-LICENSES.md"; exit 1; }
       - name: Docs
         run: cargo doc --no-deps
         env:
