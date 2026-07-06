@@ -41,6 +41,13 @@ Decide the next semantic version first, then update all versioned files together
 - `Cargo.lock` — bump lisplens's own entry (run `cargo build`, or
   `cargo update -p lisplens --precise <x.y.z>`, and commit the change). Unlike a
   library, this binary crate **tracks `Cargo.lock`**, so it must stay in sync.
+- `THIRD-PARTY-LICENSES.md` — **regenerate it in the same commit**, even when no
+  dependency changed: `cargo about generate about.hbs -o THIRD-PARTY-LICENSES.md`.
+  `cargo about` includes lisplens *itself* in the file (its own MPL-2.0 entry
+  carries the version number), so a version bump alone makes the committed file
+  stale — and CI's "Third-party licenses up to date" drift guard will fail the
+  release PR if you skip this. (Needs `cargo about` installed:
+  `cargo install cargo-about --features cli`.)
 - `CHANGELOG.md` — seal `[Unreleased]` into the new version section (below).
 
 ### Seal the `[Unreleased]` entries — the load-bearing step
@@ -214,6 +221,8 @@ gh release create vx.y.z --title vx.y.z \
 - `README.md` reconciled against the sealed changelog and the real CLI: commands,
   language tiers, features/Status, and config sources all current.
 - `Cargo.toml` `version` and the `lisplens` entry in `Cargo.lock` both equal `x.y.z`.
+- `THIRD-PARTY-LICENSES.md` regenerated with `cargo about` (it carries lisplens's own
+  version, so a bump alone makes it stale and fails CI's drift guard).
 - `[Unreleased]` / `[x.y.z]` links at the bottom of `CHANGELOG.md` resolve.
 - `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, `cargo doc`, and
   `cargo publish --dry-run` all pass; the commit message is `Bump up version to x.y.z`.
