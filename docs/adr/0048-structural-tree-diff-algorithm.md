@@ -91,10 +91,20 @@ mode also renders each added/removed definition as its expandable **Lens**
 line with an anchor + preview. This is deliberately the Lens, **not** verbatim
 source: previews keep it token-bounded (the whole point of the structural diff
 over a raw diff), and every node is a real edit anchor an agent can drill.
-Full-verbatim added bodies stay a possible `--verbose` opt-in, not the default.
-`diff_files_deep` returns a `DeepDiff { changed, added, removed }`; JSON tags
-each entry `changed`/`added`/`removed` and carries the Lens nodes on the latter
-two.
+Full-verbatim added bodies are the `--verbose` opt-in (implemented — see below),
+not the default. `diff_files_deep` returns a `DeepDiff { changed, added, removed }`;
+JSON tags each entry `changed`/`added`/`removed` and carries the Lens nodes on the
+latter two.
+
+**`--verbose` — full-verbatim added/removed bodies.** `diff_files_deep` takes a
+`verbose` flag; when set, each `UnitLens` additionally carries the definition's
+exact source (`UnitLens::verbatim`, the form's span), and the text/HTML renderers
+show that body verbatim in place of the Lens previews (JSON adds a `verbatim`
+field beside the always-present `lens`). This trades the token bound for
+completeness — for reading a whole new definition rather than skimming it — so it
+stays opt-in. `--verbose` implies deep (like `--unit`), since the added/removed
+body view only exists in the deep path. Changed definitions are untouched: their
+tree diff is already exact.
 
 ## HTML view (#42)
 

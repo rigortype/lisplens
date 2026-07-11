@@ -586,6 +586,10 @@ pub struct UnitLens {
     /// The definition's expandable Lens (ADR-0013): node per line, `depth` 0 is
     /// the definition itself.
     pub lens: Vec<NodeEntry>,
+    /// Full-verbatim source of the definition — populated only in `verbose` mode
+    /// (`--verbose`), where the token-bounded Lens previews are not enough and the
+    /// caller wants the added/removed body's exact text. `None` otherwise.
+    pub verbatim: Option<String>,
 }
 
 /// The result of [`diff_files_deep`] (ADR-0048, #44): changed definitions with
@@ -611,7 +615,19 @@ impl DeepDiff {
 /// [`FormDiff`], and for every *added*/*removed* definition its expandable Lens —
 /// all optionally filtered to a `name`. So a deep view shows both how changed
 /// definitions changed *and* what added/removed ones contain.
-pub fn diff_files_deep(old: &str, new: &str, dialect: Dialect, name: Option<&str>) -> DeepDiff {
+///
+/// With `verbose`, each added/removed definition additionally carries its
+/// full-verbatim source ([`UnitLens::verbatim`]); the renderers then show the
+/// exact body instead of the token-bounded Lens previews (ADR-0048's sanctioned
+/// `--verbose` opt-in). Changed definitions are unaffected — their tree diff is
+/// already exact.
+pub fn diff_files_deep(
+    old: &str,
+    new: &str,
+    dialect: Dialect,
+    name: Option<&str>,
+    verbose: bool,
+) -> DeepDiff {
     let old_parsed = parse(old, &Options::for_dialect(dialect));
     let new_parsed = parse(new, &Options::for_dialect(dialect));
     let (old_units, _) = collect_units(old, &old_parsed.data, dialect);
@@ -644,6 +660,7 @@ pub fn diff_files_deep(old: &str, new: &str, dialect: Dialect, name: Option<&str
         line: u.line,
         hash: u.hash.clone(),
         lens: node_lens(src, u.form),
+        verbatim: verbose.then(|| slice(src, u.form).to_string()),
     };
     let mut added: Vec<UnitLens> = matched
         .added
@@ -819,6 +836,16 @@ pub fn deep_text(diff: &DeepDiff) -> String {
                 u.line,
                 u.hash
             ));
+            if let Some(src) = &u.verbatim {
+                // Verbose: the definition's exact source, each line indented one
+                // step under the header.
+                for line in src.lines() {
+                    out.push_str("  ");
+                    out.push_str(line);
+                    out.push('\n');
+                }
+                continue;
+            }
             // Skip depth 0 (the definition itself, already in the header); show
             // its inner Lens indented.
             for node in u.lens.iter().skip(1) {
@@ -869,6 +896,7 @@ pub fn deep_json(diff: &DeepDiff) -> serde_json::Value {
                     "lens": u.lens.iter().map(|n| json!({
                         "line": n.line, "depth": n.depth, "hash": n.hash, "preview": n.preview,
                     })).collect::<Vec<_>>(),
+                    "verbatim": u.verbatim,
                 })
             })
             .collect()
@@ -1030,13 +1058,19 @@ pub fn deep_html(diff: &DeepDiff) -> String {
                 u.line,
                 esc(&u.hash),
             ));
-            for node in u.lens.iter().skip(1) {
-                b.push_str(&format!(
-                    "<div class=\"row\" style=\"{}\">{}  {}</div>",
-                    pad_em(node.depth as usize),
-                    esc(&node.hash),
-                    esc(&node.preview)
-                ));
+            if let Some(src) = &u.verbatim {
+                // Verbose: the definition's exact source (the `.tree` block is
+                // `white-space:pre`, so newlines and indentation survive).
+                b.push_str(&format!("<div class=\"row\">{}</div>", esc(src)));
+            } else {
+                for node in u.lens.iter().skip(1) {
+                    b.push_str(&format!(
+                        "<div class=\"row\" style=\"{}\">{}  {}</div>",
+                        pad_em(node.depth as usize),
+                        esc(&node.hash),
+                        esc(&node.preview)
+                    ));
+                }
             }
             b.push_str("</div></div>");
         }
@@ -1302,7 +1336,7 @@ mod tests {
     fn deep_diff_of_a_changed_defun() {
         let old = "(defun g (x) (+ x 1))\n";
         let new = "(defun g (x) (+ x 2))\n";
-        let deep = diff_files_deep(old, new, Dialect::EmacsLisp, None);
+        let deep = diff_files_deep(old, new, Dialect::EmacsLisp, None, false);
         assert_eq!(deep.changed.len(), 1);
         assert_eq!(deep.changed[0].name, "g");
         // The 1 -> 2 replace is somewhere in the tree; the text renders it.
@@ -1315,12 +1349,12 @@ mod tests {
         let old = "(defun a () 1)\n(defun b () 2)\n";
         let new = "(defun a () 10)\n(defun b () 20)\n";
         assert_eq!(
-            diff_files_deep(old, new, Dialect::EmacsLisp, None)
+            diff_files_deep(old, new, Dialect::EmacsLisp, None, false)
                 .changed
                 .len(),
             2
         );
-        let only_b = diff_files_deep(old, new, Dialect::EmacsLisp, Some("b"));
+        let only_b = diff_files_deep(old, new, Dialect::EmacsLisp, Some("b"), false);
         assert_eq!(only_b.changed.len(), 1);
         assert_eq!(only_b.changed[0].name, "b");
     }
@@ -1331,7 +1365,7 @@ mod tests {
         // not just its name; likewise a removed one.
         let old = "(defun gone (x) (* x 2))\n";
         let new = "(defun fresh (n) (let ((r (+ n 1))) (message \"%s\" r)))\n";
-        let deep = diff_files_deep(old, new, Dialect::EmacsLisp, None);
+        let deep = diff_files_deep(old, new, Dialect::EmacsLisp, None, false);
         assert!(deep.changed.is_empty());
         assert_eq!(deep.added.len(), 1);
         assert_eq!(deep.removed.len(), 1);
@@ -1352,6 +1386,51 @@ mod tests {
         );
         // Every Lens node carries a usable anchor hash.
         assert!(added.lens.iter().all(|n| n.hash.len() == 4));
+        // Non-verbose: no verbatim body is attached.
+        assert!(added.verbatim.is_none());
+    }
+
+    #[test]
+    fn deep_diff_verbose_renders_full_verbatim_bodies() {
+        // `--verbose`: an added/removed definition renders its exact source, so a
+        // token beyond the 60-char preview boundary — invisible in the default
+        // Lens view — shows up in full.
+        let old = "(defun gone () nil)\n";
+        let new = "\
+(defun fresh (n)
+  \"A long docstring past the sixty-character preview boundary END-MARKER-ZZZ.\"
+  (message \"%s\" n))
+";
+        let terse = diff_files_deep(old, new, Dialect::EmacsLisp, None, false);
+        assert!(
+            !deep_text(&terse).contains("END-MARKER-ZZZ"),
+            "the terse preview should truncate the long docstring"
+        );
+
+        let deep = diff_files_deep(old, new, Dialect::EmacsLisp, None, true);
+        let added = &deep.added[0];
+        // The exact source is attached and carries the whole body verbatim.
+        let verbatim = added
+            .verbatim
+            .as_deref()
+            .expect("verbose attaches verbatim");
+        assert!(verbatim.contains("END-MARKER-ZZZ"));
+        assert!(verbatim.contains("(message \"%s\" n)"));
+        // …and it reaches the rendered text (and HTML) untruncated.
+        let text = deep_text(&deep);
+        assert!(text.contains("+ defun fresh"), "text:\n{text}");
+        assert!(
+            text.contains("END-MARKER-ZZZ"),
+            "verbatim body missing:\n{text}"
+        );
+        assert!(deep_html(&deep).contains("END-MARKER-ZZZ"));
+        // JSON exposes the verbatim field alongside the Lens.
+        let json = deep_json(&deep);
+        let added_json = &json["added"][0];
+        assert!(added_json["verbatim"]
+            .as_str()
+            .is_some_and(|s| s.contains("END-MARKER-ZZZ")));
+        assert!(added_json["lens"].is_array());
     }
 
     #[test]
@@ -1395,7 +1474,7 @@ mod tests {
     fn deep_diff_unit_filter_matches_added() {
         let old = "(defun keep () 1)\n";
         let new = "(defun keep () 1)\n(defun brand-new () 42)\n";
-        let only = diff_files_deep(old, new, Dialect::EmacsLisp, Some("brand-new"));
+        let only = diff_files_deep(old, new, Dialect::EmacsLisp, Some("brand-new"), false);
         assert!(only.changed.is_empty() && only.removed.is_empty());
         assert_eq!(only.added.len(), 1);
         assert_eq!(only.added[0].name, "brand-new");

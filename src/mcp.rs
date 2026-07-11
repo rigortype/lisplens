@@ -127,12 +127,13 @@ fn tools() -> Value {
         ),
         tool(
             "diff",
-            "Structural diff of two Lisp versions, modulo formatting (whitespace/comment churn is never a change). File mode (`old`+`new` paths): the definition-level attention map (ADR-0047) — which definitions were added/removed/changed. Add `deep` to drill every changed definition's internals, or `unit` to drill one by name (ADR-0048). Form mode (`oldForm`+`newForm` snippet strings, `dialect` optional): the intra-form tree diff of the two forms directly. `json` returns structured output instead of text",
+            "Structural diff of two Lisp versions, modulo formatting (whitespace/comment churn is never a change). File mode (`old`+`new` paths): the definition-level attention map (ADR-0047) — which definitions were added/removed/changed. Add `deep` to drill every changed definition's internals, or `unit` to drill one by name (ADR-0048). Add `verbose` (implies deep) to render added/removed definitions as their full-verbatim body instead of the token-bounded Lens preview. Form mode (`oldForm`+`newForm` snippet strings, `dialect` optional): the intra-form tree diff of the two forms directly. `json` returns structured output instead of text",
             json!({
                 "old": json!({ "type": "string", "description": "path to the old/base version (file mode)" }),
                 "new": json!({ "type": "string", "description": "path to the new version (file mode)" }),
                 "deep": json!({ "type": "boolean", "description": "drill each changed definition's internals (ADR-0048)" }),
                 "unit": json!({ "type": "string", "description": "drill only the definition(s) with this name (implies deep)" }),
+                "verbose": json!({ "type": "boolean", "description": "render added/removed definitions as full-verbatim source instead of the token-bounded Lens preview (implies deep; default false)" }),
                 "oldForm": json!({ "type": "string", "description": "old form snippet (form mode; with newForm)" }),
                 "newForm": json!({ "type": "string", "description": "new form snippet (form mode; with oldForm)" }),
                 "dialect": json!({ "type": "string", "description": "dialect for form mode, kebab-case (default emacs-lisp)" }),
@@ -308,9 +309,15 @@ fn run_tool(name: &str, args: &Value) -> Result<String, String> {
             let new_src = read(new)?;
             let dialect = dialect_for_path(Path::new(new));
             let unit = args.get("unit").and_then(Value::as_str);
-            let deep = unit.is_some() || args.get("deep").and_then(Value::as_bool).unwrap_or(false);
+            let verbose = args
+                .get("verbose")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let deep = unit.is_some()
+                || verbose
+                || args.get("deep").and_then(Value::as_bool).unwrap_or(false);
             Ok(if deep {
-                let d = crate::diff::diff_files_deep(&old_src, &new_src, dialect, unit);
+                let d = crate::diff::diff_files_deep(&old_src, &new_src, dialect, unit, verbose);
                 if html {
                     crate::diff::deep_html(&d)
                 } else if json {
