@@ -19,7 +19,7 @@ description: >-
   resolution), or merely explaining Lisp syntax.
 license: MPL-2.0
 metadata:
-  version: 0.2.2
+  version: 0.2.3
 ---
 
 # lisplens
@@ -119,6 +119,11 @@ unchanged siblings elided. An *added* or *removed* definition renders as its
 **Lens** — its inner nodes with an anchor + preview each — so you see what a new
 function actually contains, not just that its name appeared. Reorders aren't
 tracked as moves: a shuffled form reads as an add plus a remove.
+
+Add `--verbose` (implies `--deep`) to render added/removed definitions as their
+**full source** instead of the token-bounded Lens preview — for when you want to
+read a whole new definition's body, not skim it. It only changes added/removed
+rendering; changed defs still show their pruned tree.
 
 This tree is **complete for the "how did it change" question** — every subform
 that differs is shown as `~`/`+`/`-`, and everything else is provably unchanged
