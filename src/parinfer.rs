@@ -163,6 +163,11 @@ fn run_paren(req: &Request) -> Answer {
 // Indent mode (#25)
 // ---------------------------------------------------------------------------
 
+/// The page-break character (`^L`, U+000C). It is content, not indentation, so
+/// indent mode preserves it verbatim rather than treating it as strippable
+/// whitespace (matching the formatter, PR #51).
+const PAGE_BREAK: char = '\u{0c}';
+
 /// One structural delimiter token on a line.
 struct DelimTok {
     /// Byte offset of the delimiter's start (`(`, `[`, `#(`, `)`, …).
@@ -314,8 +319,17 @@ fn run_indent_inner(req: &Request, protect: Option<usize>) -> Answer {
             }
         }
 
-        let code = source[ls..strip_from].trim_end();
+        // Strip trailing spaces/tabs, but NOT a page break (`^L`): a page break is
+        // content, not indentation, so `trim_end` (which counts `^L` as whitespace)
+        // would silently delete the section separators of an Emacs Lisp file — the
+        // same bug fixed in the formatter (PR #51). A line whose remaining content
+        // is only whitespace and/or page breaks makes no indentation decision (like
+        // a blank line) but is still emitted verbatim so the `^L` survives.
+        let code = source[ls..strip_from].trim_end_matches([' ', '\t']);
         let code_owned = code.to_string();
+        let structurally_blank = code
+            .chars()
+            .all(|c| c == ' ' || c == '\t' || c == PAGE_BREAK);
         // The comment portion keeps the whitespace immediately before it.
         let comment = match comment_start[l] {
             Some(cs) => {
@@ -326,13 +340,15 @@ fn run_indent_inner(req: &Request, protect: Option<usize>) -> Answer {
             None => String::new(),
         };
 
-        if code.is_empty() {
-            // A blank line, a comment-only line, or a line that was only movable
-            // closers: no code, so it makes no indentation decision and is not a
-            // target for appended closers (a closer would land on a comment). Any
-            // dropped closers are re-inferred at the next code line or EOF.
+        if structurally_blank {
+            // A blank line, a comment-only line, a line that was only movable
+            // closers, or a bare page-break separator: no code, so it makes no
+            // indentation decision and is not a target for appended closers (a
+            // closer would land on a comment or a `^L`). Any dropped closers are
+            // re-inferred at the next code line or EOF. `code_owned` carries any
+            // page break through verbatim; for a plain blank line it is empty.
             out.push(OutLine {
-                code: String::new(),
+                code: code_owned,
                 comment,
             });
             continue;
@@ -1019,6 +1035,51 @@ mod tests {
         let src = "(php-foo (bar\n       baz";
         let a = indent(src, Dialect::EmacsLisp);
         assert_eq!(a.text, "(php-foo (bar)\n       baz)");
+    }
+
+    // --- page breaks (^L) are content, not whitespace ---
+
+    /// Paren mode reindents through the formatter, which preserves `^L` page-break
+    /// separators (PR #51). The transform must equal the formatter's output and
+    /// keep every `^L` — parinfer must not reintroduce the separator-deleting bug.
+    #[test]
+    fn paren_mode_preserves_page_breaks() {
+        let src = "(defun a ()\n1)\n\u{0c}\n(defun b ()\n2)\n";
+        let answer = run(&req(Mode::Paren, src, Dialect::EmacsLisp));
+        assert!(answer.success);
+        let expected = format::format(src, &FormatConfig::default(), Dialect::EmacsLisp);
+        assert_eq!(answer.text, expected, "paren mode must equal the formatter");
+        assert_eq!(
+            answer.text.matches('\u{0c}').count(),
+            1,
+            "the page break survives"
+        );
+    }
+
+    /// Indent mode must preserve a bare `^L` line: it is content, not strippable
+    /// whitespace, so `trim_end` must not eat it (the formatter bug, PR #51). A
+    /// page-break-only line makes no indentation decision but is emitted verbatim,
+    /// leaving well-formed input byte-identical (and the transform idempotent).
+    #[test]
+    fn indent_preserves_a_page_break_line() {
+        let src = "(defun a ()\n  1)\n\u{0c}\n(defun b ()\n  2)\n";
+        let a = indent(src, Dialect::EmacsLisp);
+        assert!(a.success);
+        assert_eq!(a.text, src, "page break kept, structure untouched");
+        assert_balanced(&a.text, Dialect::EmacsLisp);
+        // And running it again changes nothing.
+        assert_eq!(indent(&a.text, Dialect::EmacsLisp).text, src);
+    }
+
+    /// A `^L` sharing a line with a following comment survives too — the page break
+    /// stays as leading content, the comment after it is preserved, and the line is
+    /// treated as structurally blank (it makes no indentation decision).
+    #[test]
+    fn indent_preserves_a_page_break_before_a_comment() {
+        let src = "(defun a ()\n  1)\n\u{0c};; Section\n(defun b ()\n  2)\n";
+        let a = indent(src, Dialect::EmacsLisp);
+        assert!(a.success);
+        assert_eq!(a.text, src, "`^L;; Section` line preserved verbatim");
     }
 
     // --- cursor-line trail protection (#31) ---
