@@ -13,6 +13,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - name: Snapshot size
+        # docs/CURRENT_WORKS.md is one ephemeral handoff, replaced each time
+        # (contract in its header). Hand-compression does not hold on its own —
+        # an earlier revision grew to 656 lines of restated history — so the
+        # cap is mechanical. If this fails, move durable content to the dev
+        # docs and work items to the issue tracker; do not raise the cap.
+        run: |
+          lines=$(wc -l < docs/CURRENT_WORKS.md)
+          if [ "$lines" -gt 120 ]; then
+            echo "::error::docs/CURRENT_WORKS.md is $lines lines (cap 120) — it is a replaceable handoff, not an archive. Durable knowledge goes to docs/dev + CHANGELOG; backlog goes to GitHub issues."
+            exit 1
+          fi
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
