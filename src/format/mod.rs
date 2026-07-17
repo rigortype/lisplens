@@ -397,7 +397,20 @@ fn format_impl(
                 match container_at(&parsed.data, range.start) {
                     Some(c) => match engine {
                         Engine::Elisp => {
-                            indent_for(&cols, &table, c, range.start, config.body_indent)
+                            // `cl-flet`/`cl-labels` binding bodies indent as local
+                            // defuns, which needs the line's ancestor forms, not
+                            // just its innermost container; check that first.
+                            let mut path = Vec::new();
+                            container_path(&parsed.data, range.start, &mut path);
+                            cl_flet_binding_body_indent(
+                                &cols,
+                                &path,
+                                range.start,
+                                config.body_indent,
+                            )
+                            .unwrap_or_else(|| {
+                                indent_for(&cols, &table, c, range.start, config.body_indent)
+                            })
                         }
                         Engine::CommonLisp => {
                             commonlisp::indent(&cols, source, &parsed.data, c, range.start, config)
@@ -578,6 +591,105 @@ pub(super) fn container_at<'a, 't>(data: &'a [Datum<'t>], offset: usize) -> Opti
         }
     }
     None
+}
+
+/// The chain of enclosing lists whose spans strictly contain `offset`, outermost
+/// first, so `out.last()` is the same innermost list `container_at` returns. Only
+/// `List` levels are recorded (the units that anchor indentation); `Prefixed` /
+/// reader-macro wrappers are descended through without being pushed, matching how
+/// `container_at` treats them. Used to see a line's *ancestor* forms, which the
+/// `cl-flet` binding-body rule needs and the innermost container alone can't give.
+pub(super) fn container_path<'a, 't>(
+    data: &'a [Datum<'t>],
+    offset: usize,
+    out: &mut Vec<&'a Datum<'t>>,
+) {
+    for d in data {
+        let (start, end) = (d.span.start as usize, d.span.end as usize);
+        if start < offset && offset < end {
+            match &d.kind {
+                DatumKind::List { items, tail, .. } => {
+                    out.push(d);
+                    container_path(items, offset, out);
+                    if let Some(t) = tail {
+                        container_path(std::slice::from_ref(t), offset, out);
+                    }
+                }
+                DatumKind::Prefixed { inner, arg, .. } => {
+                    if let Some(a) = arg {
+                        container_path(std::slice::from_ref(a), offset, out);
+                    }
+                    container_path(std::slice::from_ref(inner), offset, out);
+                }
+                DatumKind::HashLiteral {
+                    inner: Some(inner), ..
+                } => container_path(std::slice::from_ref(inner), offset, out),
+                _ => {}
+            }
+            return;
+        }
+    }
+}
+
+/// Emacs indents each `(name ARGLIST body…)` binding of `cl-flet` / `cl-flet*` /
+/// `cl-labels` / `cl-macrolet` as a *local defun*: every continuation line past
+/// `name` — a body form, or an `ARGLIST` written on its own line — sits at the
+/// binding's own open-paren column plus `lisp-body-indent`, not aligned under
+/// `name`/`ARGLIST` the way an ordinary call's arguments are. Returns that column
+/// when `offset` begins such a line; `None` otherwise. A line *inside* a multi-line
+/// `ARGLIST` is excluded automatically: its innermost container is the arglist, so
+/// `binding` is not `path`'s last entry and the head/binding-list checks below miss
+/// — that line keeps ordinary list alignment, as Emacs does.
+///
+/// Restricted to exactly those four heads: `cl-symbol-macrolet` also has
+/// indent-function 1 but its bindings are `(name value)` data pairs, not defuns.
+fn cl_flet_binding_body_indent(
+    cols: &Cols,
+    path: &[&Datum],
+    offset: usize,
+    body: usize,
+) -> Option<usize> {
+    let n = path.len();
+    if n < 3 {
+        return None;
+    }
+    let form = path[n - 3]; // the `(cl-flet ((…)) …)` form
+    let binding_list = path[n - 2]; // its list of bindings
+    let binding = path[n - 1]; // the `(name ARGLIST body…)` being indented
+    let DatumKind::List {
+        items: form_items, ..
+    } = &form.kind
+    else {
+        return None;
+    };
+    match form_items.first().and_then(as_symbol) {
+        Some("cl-flet" | "cl-flet*" | "cl-labels" | "cl-macrolet") => {}
+        _ => return None,
+    }
+    // `binding_list` must be the form's distinguished argument (its binding list),
+    // not one of the body forms that follow it — those are ordinary calls.
+    if form_items.get(1).map(|b| b.span.start) != Some(binding_list.span.start) {
+        return None;
+    }
+    // The binding is `(name ARGLIST body…)` and Emacs treats the whole thing as a
+    // local defun: every continuation line past the `name` — an own-line `ARGLIST`
+    // as much as a body form — goes to the binding's open-paren column plus
+    // `lisp-body-indent`. (A line *inside* a multi-line `ARGLIST` has the arglist,
+    // not the binding, as its innermost container, so `binding` isn't `path`'s last
+    // entry there and this function returns earlier — that line keeps ordinary
+    // list alignment, as Emacs does.)
+    let DatumKind::List {
+        items: bind_items, ..
+    } = &binding.kind
+    else {
+        return None;
+    };
+    let name = bind_items.first()?;
+    as_symbol(name)?; // a binding's car is the function name; a real symbol
+    if offset <= name.span.end as usize {
+        return None;
+    }
+    Some(cols.col(binding.span.start as usize) + body)
 }
 
 /// Whether `offset` falls strictly inside a string literal.
@@ -1170,6 +1282,87 @@ nil)
     fn a_whitespace_only_line_outside_a_string_is_blanked() {
         let input = "(defun f ()\n  (a))\n   \n(defun g ()\n  (b))\n";
         let expected = "(defun f ()\n  (a))\n\n(defun g ()\n  (b))\n";
+        assert_eq!(format_elisp(input, &FormatConfig::default()), expected);
+    }
+
+    /// Emacs indents each `(name ARGLIST body…)` binding of `cl-labels` / `cl-flet`
+    /// / `cl-flet*` / `cl-macrolet` as a *local defun*: a body form sits at the
+    /// binding's own open-paren column plus `lisp-body-indent`, not aligned under
+    /// `ARGLIST` as an ordinary call's continuation would be. Goldens captured from
+    /// Emacs `indent-region` (with `cl-lib`/`cl-macs` loaded).
+    #[test]
+    fn cl_labels_binding_body_indents_as_local_defun() {
+        let input = "(cl-labels ((json-get (obj key)\n(cond\n((hash-table-p obj)\n(gethash key obj)))))\n(body))\n";
+        let expected = "\
+(cl-labels ((json-get (obj key)
+              (cond
+               ((hash-table-p obj)
+                (gethash key obj)))))
+  (body))
+";
+        assert_eq!(format_elisp(input, &FormatConfig::default()), expected);
+    }
+
+    /// Multiple `cl-flet` bindings, each with its own body at binding-open + 2.
+    #[test]
+    fn cl_flet_multiple_bindings_each_indent_their_body() {
+        let input = "(cl-flet ((f (x)\n(+ x 1))\n(g (y)\n(* y 2)))\n(f 1))\n";
+        let expected = "\
+(cl-flet ((f (x)
+            (+ x 1))
+          (g (y)
+            (* y 2)))
+  (f 1))
+";
+        assert_eq!(format_elisp(input, &FormatConfig::default()), expected);
+    }
+
+    /// An empty `ARGLIST` still puts the body at binding-open + 2, and a `cl-macrolet`
+    /// binding is treated the same as `cl-flet`/`cl-labels`.
+    #[test]
+    fn cl_flet_empty_arglist_and_cl_macrolet_body() {
+        let input = "(cl-labels ((h ()\nnil))\n(h))\n\n(cl-macrolet ((m (x)\n`(+ ,x 1)))\n(m 2))\n";
+        let expected = "\
+(cl-labels ((h ()
+              nil))
+  (h))
+
+(cl-macrolet ((m (x)
+                `(+ ,x 1)))
+  (m 2))
+";
+        assert_eq!(format_elisp(input, &FormatConfig::default()), expected);
+    }
+
+    /// An `ARGLIST` written on its own line (not sharing the binding's first line)
+    /// is a continuation past `name`, so Emacs sends it to binding-open + 2 just
+    /// like a body form — the binding is one local defun.
+    #[test]
+    fn cl_labels_own_line_arglist_indents_as_body() {
+        let input = "(cl-labels ((get-xrefs-in-file\n(file-locs)\n(-let [(filename . matches) file-locs]\n(list filename matches))))\n(body))\n";
+        let expected = "\
+(cl-labels ((get-xrefs-in-file
+              (file-locs)
+              (-let [(filename . matches) file-locs]
+                    (list filename matches))))
+  (body))
+";
+        assert_eq!(format_elisp(input, &FormatConfig::default()), expected);
+    }
+
+    /// A multi-line `ARGLIST` keeps ordinary list alignment on its continuation
+    /// (`b` under `a`), while the binding's body still goes to binding-open + 2 —
+    /// the body rule keys on the innermost container being the binding itself, which
+    /// the arglist line is not.
+    #[test]
+    fn cl_flet_multiline_arglist_keeps_list_alignment() {
+        let input = "(cl-flet ((k (a\nb)\n(list a b)))\n(k 1 2))\n";
+        let expected = "\
+(cl-flet ((k (a
+              b)
+            (list a b)))
+  (k 1 2))
+";
         assert_eq!(format_elisp(input, &FormatConfig::default()), expected);
     }
 
