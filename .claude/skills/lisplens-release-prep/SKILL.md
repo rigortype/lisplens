@@ -31,6 +31,12 @@ At a glance: prepare on a branch → **PR (human reviews CHANGELOG + README)** �
   created at <https://crates.io/settings/tokens> with the `publish-new` and
   `publish-update` scopes. The first-ever publish claims the crate name; after
   that the token can be narrowed to `publish-update`.
+- **Tokens expire.** If `publish-crate` fails with `403 Forbidden:
+  authentication failed` at the *upload* step (the package build before it
+  succeeded), the token has expired or been revoked — nothing is partially
+  published (crates.io rejects the whole upload, and the Release/binaries jobs
+  never ran). The human rotates the secret, then simply re-run the same
+  tag-triggered run (`gh run rerun <id>`) — no re-tag needed. Hit at v0.6.0.
 - The binary job uses the built-in `GITHUB_TOKEN`; no extra secret needed.
 
 ## Update release metadata
@@ -59,8 +65,8 @@ messages. It is also the review surface the release PR exists for.
 1. **If `[Unreleased]` is empty or thin, reconstruct it first.** Entries are meant
    to accumulate there as work lands, but that discipline slips. Run
    `git log <last-tag>..HEAD --oneline` (e.g. `git log v0.1.1..HEAD`), and derive
-   the user-facing changes from the commits, PRs, and the `## Now` bullets in
-   `docs/CURRENT_WORKS.md` (which already summarise each change in release voice).
+   the user-facing changes from the commits and their PRs (the PR bodies usually
+   already summarise each change in release voice).
 2. Read the whole `[Unreleased]` block. Classify each top-level bullet:
    release-style (leave) or commit-style (rewrite).
 3. Rewrite every commit-style bullet — one self-contained sentence per bullet;
@@ -182,12 +188,14 @@ binaries for x86_64/aarch64 Linux, x86_64/aarch64 macOS, and x86_64 Windows.
 ## After publish — record the release
 
 Once the publish is verified (crate on crates.io, Release with binaries attached),
-add a **`Released x.y.z`** bullet to the `## Now` section of
-[`docs/CURRENT_WORKS.md`](../../../docs/CURRENT_WORKS.md) — one paragraph: the
-release's theme, the tag + release commit, and confirmation that crates.io + the
-5-platform binaries are live — and refresh the top **Handoff** block to the
-post-release state. This step is *after* publish on purpose: the bullet asserts
-published facts. A docs-only commit straight to `master` is fine here:
+**replace** the Handoff block of
+[`docs/CURRENT_WORKS.md`](../../../docs/CURRENT_WORKS.md) with the post-release
+state, per the contract in that file's header (one handoff, replace never append,
+120-line CI cap): the release's theme in a paragraph, the tag + release commit,
+confirmation that crates.io + the 5-platform binaries are live, and the open
+backlog as issue numbers only. This step is *after* publish on purpose: the
+handoff asserts published facts. A docs-only commit straight to `master` is fine
+here:
 
 ```text
 CURRENT_WORKS: record the x.y.z release
