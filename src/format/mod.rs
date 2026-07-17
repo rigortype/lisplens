@@ -352,13 +352,18 @@ fn format_impl(
             continue;
         }
 
-        if trimmed.is_empty() {
-            new_indent[i] = 0;
-            lines.push(String::new());
-        } else if in_string(&parsed.data, range.start) {
-            // Inside a multi-line string: leave the line byte-identical.
+        if in_string(&parsed.data, range.start) {
+            // Inside a multi-line string: leave the line byte-identical. This is
+            // tested *before* the blank-line case on purpose — whitespace inside a
+            // string literal is part of the string's value, so blanking a
+            // whitespace-only line there would rewrite the data (a docstring's
+            // `"a\n   \n  b"` would silently become `"a\n\n  b"`), which a reindent
+            // must never do.
             new_indent[i] = old_indent[i];
             lines.push(content.to_string());
+        } else if trimmed.is_empty() {
+            new_indent[i] = 0;
+            lines.push(String::new());
         } else if preserve_comment_line.contains(&n) {
             // Clojure/Phel (and the induced-table dialects on this engine) never
             // reindent a comment-only line — `cljfmt` and `phel format` leave its
@@ -1146,6 +1151,26 @@ nil)
         let src = "(defun f ()\n  \"a\n    b\")\n";
         // The string's second line must not be reindented.
         assert!(format_elisp(src, &FormatConfig::default()).contains("\n    b\""));
+    }
+
+    /// A whitespace-only line *inside* a string is part of the string's value, so
+    /// the blank-line rule must not reach it: blanking it would turn the docstring
+    /// `"a\n   \n  b"` into `"a\n\n  b"` — a reindent silently rewriting the data.
+    /// Emacs leaves the line alone (`calculate-lisp-indent` returns nil in a
+    /// string). Golden captured from Emacs `indent-region`.
+    #[test]
+    fn a_whitespace_only_line_inside_a_string_keeps_its_spaces() {
+        let src = "(defun f ()\n  \"Line one.\n   \n  Line three.\"\n  nil)\n";
+        assert_eq!(format_elisp(src, &FormatConfig::default()), src);
+    }
+
+    /// The same rule outside a string: a whitespace-only line is *not* string data,
+    /// so it is normalized to empty, as Emacs's `indent-region` does.
+    #[test]
+    fn a_whitespace_only_line_outside_a_string_is_blanked() {
+        let input = "(defun f ()\n  (a))\n   \n(defun g ()\n  (b))\n";
+        let expected = "(defun f ()\n  (a))\n\n(defun g ()\n  (b))\n";
+        assert_eq!(format_elisp(input, &FormatConfig::default()), expected);
     }
 
     /// Alignment is measured in **display** columns (East Asian Width), matching
