@@ -13,7 +13,7 @@ Issues and PRDs for this repo live as GitHub issues. Use the `gh` CLI for all op
 
 Infer the repo from `git remote -v` — `gh` does this automatically when run inside a clone.
 
-> Note: this repo does not yet have a GitHub remote configured. Add one (`git remote add origin <url>`) before running `gh` operations.
+**The tracker is the only backlog.** Deferred work, follow-ups, and "candidate next work" are filed as issues with a triage label — not accumulated as prose in `docs/CURRENT_WORKS.md` (which references issues by number only; see the contract in its header).
 
 ## Pull requests as a triage surface
 
