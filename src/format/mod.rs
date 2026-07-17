@@ -1252,6 +1252,22 @@ nil)
         assert_eq!(format_elisp(input, &FormatConfig::default()), expected);
     }
 
+    /// `trim_indent` lives in the shared per-line driver, so every engine —
+    /// not just Emacs Lisp — preserves a `^L` page-break line. Pin one input
+    /// through each engine family (Clojure, Common Lisp, Scheme).
+    #[test]
+    fn a_page_break_survives_every_engine() {
+        for dialect in [Dialect::Clojure, Dialect::CommonLisp, Dialect::Scheme] {
+            let input = "(a\n1)\n\u{0c}\n(b\n2)\n";
+            let out = format(input, &FormatConfig::default(), dialect);
+            assert_eq!(
+                out.matches('\u{0c}').count(),
+                1,
+                "{dialect:?} must keep the page break"
+            );
+        }
+    }
+
     #[test]
     fn already_formatted_is_a_fixed_point() {
         let formatted = "(defun foo (x)\n  (bar x))\n";
