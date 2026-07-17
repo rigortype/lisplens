@@ -457,6 +457,43 @@ alone on its line (that case, and `^L` before a comment, match Emacs exactly and
 are pinned by `a_page_break_*` in `format::tests`). Close it by reading
 `lisp-indent-specform` against the oracle rather than by guesswork.
 
+**Corpus audit (2026-07, after the `cl-flet` fix).** A three-way sweep of the
+local elpa + php-mode corpus (1167 files) — maintained file vs `emacs -Q --batch
+indent-region` vs `lisplens format`, leading whitespace normalized to columns so
+tabs-vs-spaces isn't counted — surfaced ~481 diverging lines, but almost all are
+lisplens being *right*, not gaps: the maintained file (and the `-Q` oracle) are
+stale with respect to the file's own indent declarations. Two shapes dominate,
+both the **inverse of the harness caveat above** (there the oracle is wrong; here
+the maintained file is too): (a) a macro with `(declare (indent N))` that the
+author didn't reindent their file to — e.g. yaml.el's `yaml--rep` (186 lines, all
+lisplens-correct once the declare is honored); and (b) a macro defined inside
+`(eval-and-compile …)` / `(eval-when-compile …)` — lisplens's harvester descends
+into those wrappers, so it applies the spec a real loaded Emacs would, while a
+naive oracle that only reads top-level forms misses it (poly-lock.el's
+`with-buffer-prepared-for-poly-lock`, 82 lines). A declare-aware oracle (harvest
+the file's specs, `put` them, then `indent-region`) collapses these to zero. Bottom
+line: real-world elpa fidelity is effectively complete; treat a fresh corpus diff
+as guilty-until-proven — reproduce the form in isolation and cross-check a
+declare-aware Emacs before believing it's a lisplens bug.
+
+Only two *genuine* gaps survived that audit, both rare (1–2 corpus files each) and
+so far unfixed:
+
+- **`lisp-indent-local-overrides` file-local variable** (Emacs 30+). A file's
+  trailing `Local Variables:` block can rebind the indent of specific symbols for
+  that file only — e.g. with-editor.el sets `((cond . 0) (interactive . 0))`, which
+  moves its `cond` clauses to open+2. lisplens harvests `(declare …)` and `(put …
+  'lisp-indent-function …)` but not this file-local, so it uses the default spec
+  and lands a column off. (Found only in with-editor.el across the corpus.)
+- **A quote/backquote at end of line before a data list** — `(func '` then the
+  quoted `((…) (…))` on the next line (the `lsp-register-custom-settings '` idiom,
+  lsp-xml.el). Emacs indents the quoted list near flush (enclosing-open + 1),
+  lisplens aligns it under the argument position, which for a long function name
+  pushes a big data table ~30 columns right. This is the `(COLUMN . start)`
+  prefix-interaction case named at the top of this section; fixing it touches
+  `normal_indent`'s prefix handling, so verify no regression on the common
+  same-line-prefix alignment first.
+
 The **Common Lisp** and **Scheme-family** engines are both landed
 (ADR-0031, see above), and **Clojure** has its own engine (ADR-0039, cljfmt
 oracle); the remaining dialects Emacs has no indenter for (Fennel, Janet, Hy, LFE,
