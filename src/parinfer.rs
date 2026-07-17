@@ -305,13 +305,19 @@ fn run_indent_inner(req: &Request, protect: Option<usize>) -> Answer {
         // them): the run of `Close` tokens at the end of the code region. The
         // protected (cursor) line keeps its trail verbatim (#31) — its closers
         // stay and are scanned as locked, so live editing can't collapse them.
+        // The gap check counts only spaces/tabs as strippable: a page break
+        // (`^L`) after a closer is content, so that closer is locked in place
+        // rather than stripped — stripping would discard the `^L` with it.
         let mut strip_from = code_region_end;
         if protect != Some(l) {
             for d in delims[l].iter().rev() {
                 if d.start >= strip_from {
                     continue;
                 }
-                if !d.open && source[d.end..strip_from].trim().is_empty() {
+                let gap_is_ws = source[d.end..strip_from]
+                    .chars()
+                    .all(|c| c == ' ' || c == '\t');
+                if !d.open && gap_is_ws {
                     strip_from = d.start;
                 } else {
                     break;
@@ -1080,6 +1086,30 @@ mod tests {
         let a = indent(src, Dialect::EmacsLisp);
         assert!(a.success);
         assert_eq!(a.text, src, "`^L;; Section` line preserved verbatim");
+    }
+
+    /// A closer immediately followed by a `^L` is locked, not stripped: stripping
+    /// the "movable" trail would discard the page break with it. Well-formed input
+    /// of this shape passes through byte-identical.
+    #[test]
+    fn indent_locks_a_closer_followed_by_a_page_break() {
+        let src = "(foo\n  bar)\u{0c}\n(baz)\n";
+        let a = indent(src, Dialect::EmacsLisp);
+        assert!(a.success);
+        assert_eq!(a.text, src, "closer + `^L` kept verbatim");
+        assert_balanced(&a.text, Dialect::EmacsLisp);
+    }
+
+    /// A `^L` *inside* a paren trail splits it: the closer before the `^L` is
+    /// locked (keeping the page break), while closers after it are still movable —
+    /// here the final one is superfluous and gets trimmed, and indentation
+    /// authority still restructures as usual. The `^L` must survive it all.
+    #[test]
+    fn indent_page_break_inside_a_trail_survives() {
+        let a = indent("(foo (bar\n  baz)\u{0c})\n", Dialect::EmacsLisp);
+        assert!(a.success);
+        assert_eq!(a.text, "(foo (bar)\n  baz)\u{0c}\n");
+        assert_balanced(&a.text, Dialect::EmacsLisp);
     }
 
     // --- cursor-line trail protection (#31) ---
