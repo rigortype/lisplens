@@ -180,6 +180,26 @@ fn display_width(s: &str) -> usize {
     unicode_width::UnicodeWidthStr::width(s)
 }
 
+/// `content` without the leading whitespace the reindenter is allowed to rewrite.
+///
+/// A page break (`^L`, U+000C) is *content*, not indentation: Emacs's
+/// `indent-line-to` deletes only horizontal whitespace, so a reindent pushes a
+/// `^L` to the line's new column rather than removing it, and everything from the
+/// `^L` onward is kept verbatim. `char::is_whitespace` counts `^L` as whitespace,
+/// so plain `str::trim_start` would leave a `^L`-only line looking empty and blank
+/// it out — silently deleting the page breaks that separate the `;; Variables:` /
+/// `;; Functions:` sections of an Emacs Lisp file.
+///
+/// Stopping at the `^L` also keeps the comment rules below honest: Emacs indents
+/// `^L; foo` as code (column 2 inside a form), not to `comment-column`, because the
+/// line's first character is the page break and not the `;`.
+fn trim_indent(content: &str) -> &str {
+    content.trim_start_matches(|c: char| c.is_whitespace() && c != PAGE_BREAK)
+}
+
+/// The page-break character (`^L`, U+000C) — see [`trim_indent`].
+const PAGE_BREAK: char = '\u{0c}';
+
 /// Reindent whole `source` for `dialect`, returning the formatted text. The
 /// engine is chosen by `engine_for`; leading whitespace on each line is
 /// recomputed while tokens and line order are untouched, so this never changes
@@ -299,7 +319,7 @@ fn format_impl(
     let old_indent: Vec<usize> = (1..=count as u32)
         .map(|n| {
             let content = &source[index.line_range(n).unwrap()];
-            content.len() - content.trim_start().len()
+            content.len() - trim_indent(content).len()
         })
         .collect();
     let mut new_indent = vec![0usize; count];
@@ -321,7 +341,7 @@ fn format_impl(
     for n in 1..=count as u32 {
         let range = index.line_range(n).expect("n within line_count");
         let content = &source[range.clone()];
-        let trimmed = content.trim_start();
+        let trimmed = trim_indent(content);
         let i = n as usize - 1;
 
         // Outside a touched form: keep the line byte-identical, and record its
@@ -1060,6 +1080,58 @@ three))
     fn triple_semicolon_comment_is_left_in_place() {
         let input = "(defun f ()\n;; two\n;;; three\n(body))\n";
         let expected = "(defun f ()\n  ;; two\n;;; three\n  (body))\n";
+        assert_eq!(format_elisp(input, &FormatConfig::default()), expected);
+    }
+
+    /// A page break (`^L`) is content, not indentation: a reindent must never
+    /// delete one. Emacs Lisp files separate their `;; Variables:` / `;; Functions:`
+    /// sections with a `^L` on its own line, and `str::trim_start` counts `^L` as
+    /// whitespace — which made a `^L`-only line look blank and get blanked out.
+    /// Golden captured from Emacs `indent-region`.
+    #[test]
+    fn a_page_break_line_survives_a_reindent() {
+        let input = "\
+;;; Code:
+
+\u{0c}
+(defvar test-foo nil)
+
+\u{0c}
+(defun test-bar ()
+nil)
+";
+        let expected = "\
+;;; Code:
+
+\u{0c}
+(defvar test-foo nil)
+
+\u{0c}
+(defun test-bar ()
+  nil)
+";
+        assert_eq!(format_elisp(input, &FormatConfig::default()), expected);
+    }
+
+    /// A `^L` indents like code — Emacs's `indent-line-to` deletes only the
+    /// horizontal whitespace before it, so the page break is pushed to the line's
+    /// new column instead of being removed. A top-level `^L` dedents to 0; one in a
+    /// body moves to the body indent. Golden captured from Emacs `indent-region`.
+    #[test]
+    fn a_page_break_indents_as_code() {
+        let input = "(defun a ()\n  (let ((x 1))\n\u{0c}\n    (message \"in\")\n  \u{0c}\n    x))\n\n   \u{0c}\n(defun b () nil)\n";
+        let expected = "(defun a ()\n  (let ((x 1))\n    \u{0c}\n    (message \"in\")\n    \u{0c}\n    x))\n\n\u{0c}\n(defun b () nil)\n";
+        assert_eq!(format_elisp(input, &FormatConfig::default()), expected);
+    }
+
+    /// A line whose first character is a `^L` is code, not a comment line: Emacs
+    /// sends `^L; foo` to the body indent, not to `comment-column`, because the
+    /// lone-`;` rule keys on the line's *first* character. Golden captured from
+    /// Emacs `indent-region`.
+    #[test]
+    fn a_page_break_before_a_comment_is_not_a_comment_line() {
+        let input = "(defun c ()\n\u{0c};; two\n\u{0c}; lone\n  nil)\n";
+        let expected = "(defun c ()\n  \u{0c};; two\n  \u{0c}; lone\n  nil)\n";
         assert_eq!(format_elisp(input, &FormatConfig::default()), expected);
     }
 

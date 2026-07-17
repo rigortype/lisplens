@@ -441,7 +441,23 @@ alignment is still off by a column or two. Close them one at a time with the
 harness. Note the harness's Emacs side can't see a file's own `(declare (indent
 …))` (it doesn't evaluate the file), so a file that indents by its own macros
 will show harness diffs where lisplens is in fact right — cross-check against the
-original. The **Common Lisp** and **Scheme-family** engines are both landed
+original.
+
+A **page break (`^L`) sharing a line with code**, inside a form, still indents a
+column or two off (`  ^L  (message "x")` as a `let`'s first body form: Emacs puts
+the following body lines at the body indent, lisplens aligns them under the
+`(message`). Two things differ from Emacs and interact: Emacs's `current-column`
+counts a `^L` as **2** columns (it is displayed as `^L`), where `display_width`
+gives it 0; and `specform`'s body branch aligns under the first body form, which
+is an approximation of `lisp-indent-specform`'s real rule (a `body-indent` vs
+`normal-indent` comparison) that only coincides while the first body form sits
+exactly at the body indent — which a leading `^L` is the one realistic way to
+break. Harmless for the `^L` convention itself, where the page break is always
+alone on its line (that case, and `^L` before a comment, match Emacs exactly and
+are pinned by `a_page_break_*` in `format::tests`). Close it by reading
+`lisp-indent-specform` against the oracle rather than by guesswork.
+
+The **Common Lisp** and **Scheme-family** engines are both landed
 (ADR-0031, see above), and **Clojure** has its own engine (ADR-0039, cljfmt
 oracle); the remaining dialects Emacs has no indenter for (Fennel, Janet, Hy, LFE,
 …) ride the generic Emacs Lisp fallback until they get one.
