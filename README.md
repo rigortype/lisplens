@@ -45,7 +45,8 @@ lisplens find <name> [dir]           find definitions by name across a project
 lisplens refs <name> [dir]           find symbol occurrences (code/data tagged)
 lisplens check  <file>               parse-check; diagnostics, non-zero on errors
 lisplens diff <old> <new>            structural diff by definition (modulo formatting);
-                                     --deep/--unit drill how a def changed; --html a visual page
+                                     --deep/--unit drill how a def changed; --verbose full
+                                     added/removed bodies; --html a visual page
 lisplens rename <old> <new> <file>   rename a symbol file-wide (symbol-exact, safe)
 lisplens inline <name> <file>        inline a function at its call sites (safe subset)
 lisplens docstring <name> <file>     set/replace a definition's docstring (text on stdin)
@@ -168,7 +169,8 @@ structural `insert-after`/`insert-before` inside a form), project queries
 (`find`, `refs`), a standalone `check`, the refactoring commands (`rename`,
 `inline`, `docstring`, `rewrite`, `extract`) — all validate-then-write and
 drift-checked — and structural `diff` (a definition-level change map, `--deep`/`--unit`
-to drill how a definition changed, and an `--html` visual view). `format` has native
+to drill how a definition changed — `--verbose` for full added/removed bodies — and
+an `--html` visual view). `format` has native
 indent engines for Emacs Lisp, Common Lisp, the
 Scheme family, Clojure, and Phel (each byte-exact against its oracle) plus
 Fennel, Janet, Hy, and LFE (body-indent tables, ~67–92% match); only EDN data
