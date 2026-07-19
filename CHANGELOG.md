@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **Homebrew tap distribution.** `brew install rigortype/tap/lisplens` now installs the pre-built binary on macOS and Linux (arm64 + x86_64), and `brew upgrade lisplens` tracks new releases. The release workflow updates the formula in `rigortype/homebrew-tap` automatically on each `vX.Y.Z` tag, reusing the checksums of the binaries it already uploads to the GitHub Release.
+
 ## [0.6.0] - 2026-07-18
 
 A fidelity-hardening release. The headline fix family started from a real report — `lisplens format` was deleting the `^L` (U+000C) page breaks that conventionally separate an Emacs Lisp file's `;; Variables:` / `;; Functions:` sections — and pulling that thread surfaced and fixed four more cases where a whitespace rule reached content it had no business touching, across both `format` and `parinfer`. The formatter was then audited against 1167 real packages from a live `~/.emacs.d/elpa` (a declare-aware three-way sweep vs Emacs `indent-region`): real-world indentation fidelity is now effectively complete, with the two surviving niche gaps filed as issues (#58, #59). Alongside the fixes, `diff --deep` gains a `--verbose` mode that prints an added or removed definition's exact source instead of a token-bounded preview.

@@ -25,10 +25,13 @@ back, and a mismatched or drifted file is refused (you re-read).
 ## Install
 
 ```sh
-cargo install lisplens          # from crates.io — puts `lisplens` on your PATH
+brew install rigortype/tap/lisplens   # Homebrew (macOS/Linux); pre-built binary
+cargo install lisplens                # from crates.io — puts `lisplens` on your PATH
 ```
 
-Or download a pre-built binary for your platform from the
+`brew install rigortype/tap/lisplens` taps `rigortype/homebrew-tap` on first use;
+thereafter `brew upgrade lisplens` tracks new releases. Or download a pre-built
+binary for your platform from the
 [latest release](https://github.com/rigortype/lisplens/releases/latest).
 
 As an MCP server, point your client at the `lisplens mcp` command.
