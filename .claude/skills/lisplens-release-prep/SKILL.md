@@ -7,9 +7,10 @@ metadata:
 
 # lisplens Release Prep
 
-Follow this workflow to release a new `lisplens` version. It ships two ways from
+Follow this workflow to release a new `lisplens` version. It ships three ways from
 one tag: the crate on [crates.io](https://crates.io/crates/lisplens) (`cargo
-install lisplens`) and per-platform pre-built binaries on the GitHub Release.
+install lisplens`), per-platform pre-built binaries on the GitHub Release, and a
+Homebrew formula in `rigortype/homebrew-tap` (`brew install rigortype/tap/lisplens`).
 
 **The flow is PR-gated.** You prepare the release on a branch (version bump,
 changelog seal, README reconcile, verify), open a **release PR** so a human can
@@ -38,6 +39,12 @@ At a glance: prepare on a branch → **PR (human reviews CHANGELOG + README)** �
   never ran). The human rotates the secret, then simply re-run the same
   tag-triggered run (`gh run rerun <id>`) — no re-tag needed. Hit at v0.6.0.
 - The binary job uses the built-in `GITHUB_TOKEN`; no extra secret needed.
+- **Homebrew tap.** The `homebrew` job pushes an updated `Formula/lisplens.rb`
+  to `rigortype/homebrew-tap` (that repo must exist). It needs the repository
+  secret `HOMEBREW_TAP_TOKEN` — a token with `contents:write` on the tap repo
+  (the built-in `GITHUB_TOKEN` can't reach another repo). If the secret is
+  unset the job **skips cleanly** (logs a warning, exits 0), so the crate +
+  binary release still succeeds; wire the secret up when you want the tap live.
 
 ## Update release metadata
 
@@ -184,6 +191,8 @@ The tag push triggers [`release.yml`](../../../.github/workflows/release.yml): i
 checks the tag matches `Cargo.toml`, runs `cargo publish`, creates the GitHub
 Release from this version's `CHANGELOG.md` section, then builds and uploads
 binaries for x86_64/aarch64 Linux, x86_64/aarch64 macOS, and x86_64 Windows.
+Finally the `homebrew` job updates `Formula/lisplens.rb` in `rigortype/homebrew-tap`
+from the four unix binaries' checksums (skipped if `HOMEBREW_TAP_TOKEN` is unset).
 
 ## After publish — record the release
 

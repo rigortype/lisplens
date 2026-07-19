@@ -1,0 +1,36 @@
+class Lisplens < Formula
+  desc "Token-efficient, polyglot Lisp editing for AI agents (CLI/MCP), built on lispexp"
+  homepage "https://github.com/rigortype/lisplens"
+  version "@VERSION@"
+  license "MPL-2.0"
+
+  on_macos do
+    on_arm do
+      url "@BASE@/lisplens-@TAG@-aarch64-apple-darwin.tar.gz"
+      sha256 "@SHA_MACOS_ARM@"
+    end
+    on_intel do
+      url "@BASE@/lisplens-@TAG@-x86_64-apple-darwin.tar.gz"
+      sha256 "@SHA_MACOS_INTEL@"
+    end
+  end
+
+  on_linux do
+    on_arm do
+      url "@BASE@/lisplens-@TAG@-aarch64-unknown-linux-gnu.tar.gz"
+      sha256 "@SHA_LINUX_ARM@"
+    end
+    on_intel do
+      url "@BASE@/lisplens-@TAG@-x86_64-unknown-linux-gnu.tar.gz"
+      sha256 "@SHA_LINUX_INTEL@"
+    end
+  end
+
+  def install
+    bin.install "lisplens"
+  end
+
+  test do
+    assert_match "lisplens #{version}", shell_output("#{bin}/lisplens --version")
+  end
+end
